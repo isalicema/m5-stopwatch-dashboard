@@ -1,0 +1,15 @@
+{
+  "font_name": "Noto Sans CJK SC Regular",
+  "font_marker": "M5DASH_FONT_NOTO_SANS_CJK_SC_16_V1",
+  "identity_verified": true,
+  "pixel_size": 16,
+  "glyph_count": 7544,
+  "first_codepoint": 33,
+  "last_codepoint": 65509,
+  "vlw_size": 2103621,
+  "vlw_sha256": "2dcdd8f59651c374156e183840d03c065bb153f2639cca29311b573e2d14cc7a",
+  "source_file": "NotoSansCJKsc-Regular.otf",
+  "source_sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+  "required_probe_glyphs": "任你克关务在对收正话闭音风麦",
+  "embedded_storage": "direct_flash_vlw"
+}

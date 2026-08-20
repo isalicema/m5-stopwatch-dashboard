@@ -1,0 +1,48 @@
+{
+  "server": {
+    "bind": "0.0.0.0",
+    "port": 8765,
+    "discovery_port": 8766,
+    "api_token": "COPY_THE_EXISTING_HOME_TOKEN"
+  },
+  "weather": {
+    "enabled": true,
+    "city": "苏州",
+    "latitude": 31.2989,
+    "longitude": 120.5853,
+    "timezone": "Asia/Shanghai",
+    "refresh_seconds": 3600,
+    "timeout_seconds": 8
+  },
+  "bambu": {
+    "enabled": true,
+    "name": "造物神",
+    "mode": "cloud",
+    "region": "cn",
+    "credentials_file": "~/Library/Application Support/M5Dashboard/bambu-cloud.json",
+    "full_refresh_seconds": 300
+  },
+  "codex": {
+    "enabled": true,
+    "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "hook_state_path": "~/Library/Application Support/M5Dashboard/codex_hooks.json",
+    "usage_refresh_seconds": 60,
+    "threads_refresh_seconds": 5,
+    "working_stale_seconds": 21600,
+    "local_activity_stale_seconds": 1800,
+    "expose_titles": false,
+    "expose_transcript": false,
+    "transcript_refresh_seconds": 1
+  },
+  "claude": {
+    "enabled": true,
+    "refresh_seconds": 300,
+    "activity_refresh_seconds": 1,
+    "activity_stale_seconds": 1800,
+    "expose_transcript": false,
+    "source": {
+      "mode": "local_claude_desktop",
+      "projects_root": "~/.claude/projects"
+    }
+  }
+}

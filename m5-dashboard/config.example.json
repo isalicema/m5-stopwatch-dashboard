@@ -1,0 +1,55 @@
+{
+  "server": {
+    "bind": "0.0.0.0",
+    "port": 8765,
+    "discovery_port": 8766,
+    "device_label": "Air",
+    "discovery_enabled": true,
+    "usb_enabled": true,
+    "api_token": "CHANGE_ME_TO_A_LONG_RANDOM_VALUE"
+  },
+  "peer_refresh_seconds": 2,
+  "peers": [],
+  "weather": {
+    "enabled": true,
+    "city": "苏州",
+    "latitude": 31.2989,
+    "longitude": 120.5853,
+    "timezone": "Asia/Shanghai",
+    "refresh_seconds": 3600,
+    "timeout_seconds": 8
+  },
+  "bambu": {
+    "enabled": false,
+    "name": "P2S",
+    "mode": "cloud",
+    "region": "cn",
+    "credentials_file": "~/Library/Application Support/M5Dashboard/bambu-cloud.json",
+    "full_refresh_seconds": 300
+  },
+  "codex": {
+    "enabled": true,
+    "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "hook_state_path": "~/Library/Application Support/M5Dashboard/codex_hooks.json",
+    "usage_refresh_seconds": 60,
+    "threads_refresh_seconds": 5,
+    "working_stale_seconds": 21600,
+    "local_activity_stale_seconds": 1800,
+    "expose_titles": false,
+    "expose_transcript": false,
+    "transcript_refresh_seconds": 1,
+    "peer_usage_sources": []
+  },
+  "claude": {
+    "enabled": false,
+    "refresh_seconds": 60,
+    "activity_refresh_seconds": 3,
+    "activity_stale_seconds": 1800,
+    "expose_transcript": false,
+    "source": {
+      "base_url": "http://IMAC-IP:8787",
+      "password": "",
+      "timeout_seconds": 5
+    }
+  }
+}

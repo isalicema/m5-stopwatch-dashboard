@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="450" height="450" viewBox="0 0 450 450">
+  <defs>
+    <radialGradient id="screen" cx="50%" cy="42%" r="68%">
+      <stop offset="0" stop-color="#17121d"/>
+      <stop offset="0.62" stop-color="#090b11"/>
+      <stop offset="1" stop-color="#05060a"/>
+    </radialGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18151f" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#0d0f17" stop-opacity="0.98"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d49bc5"/>
+      <stop offset="1" stop-color="#8f5f87"/>
+    </linearGradient>
+    <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feColorMatrix in="blur" values="1 0 0 0 0.69  0 1 0 0 0.48  0 0 1 0 0.63  0 0 0 0.42 0"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.62"/>
+    </filter>
+    <style>
+      .pulse { transform-origin:225px 205px; animation:pulse 1.8s ease-in-out infinite; }
+      .wave-a { transform-origin:225px 205px; animation:wave 1.8s ease-out infinite; }
+      .wave-b { transform-origin:225px 205px; animation:wave 1.8s .6s ease-out infinite; }
+      .live { animation:blink 1.3s ease-in-out infinite; }
+      .bar { transform-box:fill-box; transform-origin:center; animation:eq 1.05s ease-in-out infinite alternate; }
+      .b2{animation-delay:-.82s}.b3{animation-delay:-.58s}.b4{animation-delay:-.31s}
+      .b5{animation-delay:-.76s}.b6{animation-delay:-.16s}.b7{animation-delay:-.92s}
+      .b8{animation-delay:-.48s}.b9{animation-delay:-.67s}.b10{animation-delay:-.25s}
+      .b11{animation-delay:-.85s}.b12{animation-delay:-.39s}.b13{animation-delay:-.71s}
+      .b14{animation-delay:-.12s}.b15{animation-delay:-.55s}.b16{animation-delay:-.95s}
+      @keyframes pulse { 0%,100%{transform:scale(.96);opacity:.78} 50%{transform:scale(1.06);opacity:1} }
+      @keyframes wave { 0%{transform:scale(.78);opacity:.72} 70%,100%{transform:scale(1.24);opacity:0} }
+      @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.38} }
+      @keyframes eq { from{transform:scaleY(.28)} to{transform:scaleY(1)} }
+      text { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; }
+    </style>
+  </defs>
+
+  <circle cx="225" cy="225" r="224" fill="#020305"/>
+  <circle cx="225" cy="225" r="216" fill="url(#screen)" stroke="#26212d" stroke-width="2"/>
+  <path d="M225 9 A216 216 0 0 1 430 158" fill="none" stroke="#b07aa1" stroke-width="5" stroke-linecap="round" opacity=".82"/>
+  <circle cx="225" cy="17" r="4" fill="#d49bc5"/>
+
+  <g opacity=".35">
+    <text x="225" y="53" text-anchor="middle" fill="#a7a4ae" font-size="13" letter-spacing="1.2">CODEX · 本周剩余</text>
+    <text x="225" y="81" text-anchor="middle" fill="#f2f0f5" font-size="26" font-weight="600">64%</text>
+    <line x1="87" y1="169" x2="142" y2="169" stroke="#31303a"/>
+    <line x1="308" y1="169" x2="363" y2="169" stroke="#31303a"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="58" y="93" width="334" height="264" rx="32" fill="url(#panel)" stroke="#46414e"/>
+    <path d="M90 94 H360" stroke="#b07aa1" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <g>
+    <rect x="160" y="111" width="130" height="28" rx="14" fill="#211a27" stroke="#3e3044"/>
+    <circle class="live" cx="179" cy="125" r="4" fill="#f28e2b"/>
+    <text x="235" y="130" text-anchor="middle" fill="#d1c0d8" font-size="11" font-weight="650" letter-spacing="1.7">M5 VOICE · LIVE</text>
+  </g>
+
+  <g filter="url(#softGlow)">
+    <circle class="wave-a" cx="225" cy="205" r="67" fill="none" stroke="#b07aa1" stroke-width="2" opacity=".58"/>
+    <circle class="wave-b" cx="225" cy="205" r="67" fill="none" stroke="#b07aa1" stroke-width="2" opacity=".58"/>
+    <circle class="pulse" cx="225" cy="205" r="53" fill="#1d1723" stroke="#61425f" stroke-width="1.5"/>
+  </g>
+
+  <g class="pulse" fill="url(#accent)" stroke="url(#accent)" stroke-linecap="round">
+    <rect x="215" y="172" width="20" height="39" rx="10" stroke="none"/>
+    <path d="M207 197v5a18 18 0 0 0 36 0v-5" fill="none" stroke-width="4"/>
+    <path d="M225 220v12M213 232h24" fill="none" stroke-width="4"/>
+  </g>
+
+  <text x="225" y="281" text-anchor="middle" fill="#f2eff4" font-size="21" font-weight="600">正在发送到 Mac</text>
+  <text x="225" y="307" text-anchor="middle" fill="#89858f" font-size="13">松开 B 键停止</text>
+
+  <g fill="#b07aa1">
+    <rect class="bar b1" x="126" y="320" width="6" height="14" rx="3"/>
+    <rect class="bar b2" x="139" y="314" width="6" height="26" rx="3"/>
+    <rect class="bar b3" x="152" y="318" width="6" height="18" rx="3"/>
+    <rect class="bar b4" x="165" y="309" width="6" height="36" rx="3"/>
+    <rect class="bar b5" x="178" y="315" width="6" height="25" rx="3"/>
+    <rect class="bar b6" x="191" y="306" width="6" height="42" rx="3"/>
+    <rect class="bar b7" x="204" y="312" width="6" height="31" rx="3"/>
+    <rect class="bar b8" x="217" y="303" width="6" height="48" rx="3"/>
+    <rect class="bar b9" x="230" y="308" width="6" height="39" rx="3"/>
+    <rect class="bar b10" x="243" y="314" width="6" height="27" rx="3"/>
+    <rect class="bar b11" x="256" y="307" width="6" height="41" rx="3"/>
+    <rect class="bar b12" x="269" y="313" width="6" height="29" rx="3"/>
+    <rect class="bar b13" x="282" y="317" width="6" height="20" rx="3"/>
+    <rect class="bar b14" x="295" y="311" width="6" height="34" rx="3" fill="#f28e2b"/>
+    <rect class="bar b15" x="308" y="316" width="6" height="23" rx="3" fill="#f28e2b"/>
+    <rect class="bar b16" x="321" y="319" width="6" height="16" rx="3" fill="#f28e2b"/>
+  </g>
+
+  <g opacity=".42">
+    <circle cx="220" cy="427" r="2" fill="#5f5965"/>
+    <circle cx="231" cy="427" r="3" fill="#b07aa1"/>
+  </g>
+</svg>

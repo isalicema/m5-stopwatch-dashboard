@@ -1,0 +1,15 @@
+config.json
+bambu-cloud.json
+firmware/M5Dashboard/secrets.h
+.DS_Store
+.flash-env/
+.pytest_cache/
+.pio/
+__pycache__/
+*.pyc
+dist/M5Workstation/private/
+dist/M5Workstation/build/
+dist/*.bak-*
+*.zip
+NotoSansCJKsc-Regular.otf
+firmware/M5Dashboard/ui_font_noto_sans_sc_16.h

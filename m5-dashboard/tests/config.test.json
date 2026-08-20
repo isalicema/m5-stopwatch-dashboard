@@ -1,0 +1,23 @@
+{
+  "server": {
+    "bind": "127.0.0.1",
+    "port": 18765,
+    "api_token": "local-test-token"
+  },
+  "bambu": {
+    "enabled": false,
+    "name": "P2S"
+  },
+  "codex": {
+    "enabled": true,
+    "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "hook_state_path": "/tmp/m5-dashboard-hook-test.json",
+    "usage_refresh_seconds": 60,
+    "threads_refresh_seconds": 5,
+    "working_stale_seconds": 21600,
+    "expose_titles": false
+  },
+  "claude": {
+    "enabled": false
+  }
+}

@@ -1,0 +1,32 @@
+.DS_Store
+**/.DS_Store
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.flash-env/
+**/.pio/
+
+# Machine-local configuration and credentials
+**/config.json
+**/bambu-cloud.json
+**/secrets.h
+**/dist/M5Workstation/private/
+
+# Rebuildable or historical distribution artifacts
+**/dist/
+**/dist/M5Workstation/build/
+**/*.bak-*
+**/*.zip
+
+# Temporary research material and design drafts are not source dependencies.
+**/tmp/
+**/design-preview/
+**/NotoSansCJKsc-Regular.otf
+
+# Local investigation logs are intentionally not published
+/任务记录_*.md
+**/公司MacBook续做说明.md
+**/当前项目状态.md
+**/*最终交付记录*.md
+**/功能规划_*.md
+**/USB插线噪声排查记录*.md
