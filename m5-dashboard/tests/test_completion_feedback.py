@@ -31,15 +31,28 @@ class CompletionFeedbackTests(unittest.TestCase):
         self.assertIn("frame.ringDegrees", overlay)
         self.assertIn("frame.successRadius", overlay)
         self.assertIn("claudeProvider ? 217 : 95", overlay)
+        self.assertIn("editorialFrameAccentActive = false", overlay)
+        self.assertIn("editorialFrameBurstActive = false", overlay)
         self.assertNotIn("drawString", overlay)
         self.assertNotIn("showToast", overlay)
         self.assertNotIn("highlight", overlay)
 
+    def test_ai_completion_physical_frame_never_falls_back_to_paper(self):
+        start = self.source.index("uint16_t currentRenderedBackground()")
+        end = self.source.index("\n}\n", start) + 3
+        background = self.source[start:end]
+
+        self.assertIn("if (frame.visible)", background)
+        self.assertIn(
+            "if (frame.successRadius < kDashboardCompletionFullRadius)",
+            background,
+        )
+        self.assertIn("return rgb(backgroundR, backgroundG, backgroundB);", background)
+
     def test_non_completion_haptics_are_preserved(self):
         self.assertIn("startVibration(190, 300)", self.source)
-        self.assertIn("startVibration(printer.state ==", self.source)
-        self.assertIn("startTonePattern(kPrinterDoneTones", self.source)
-        self.assertIn("startTonePattern(kPrinterErrorTones", self.source)
+        self.assertIn("startVibration(170, 220)", self.source)
+        self.assertIn("startTonePattern(kFocusDoneTones", self.source)
         self.assertIn("updateControlHaptic(value)", self.source)
 
     def test_waiting_haptic_is_suppressed_when_a_task_just_completed(self):
@@ -51,7 +64,7 @@ class CompletionFeedbackTests(unittest.TestCase):
         self.assertIn("if (!completionStarted) startVibration(190, 300)", transition)
         self.assertIn("startTonePattern(kCodexWaitingTones", transition)
         self.assertIn("bool completionStarted = updateCompletionResults();", self.source)
-        self.assertIn("notifyTransitions(oldPrinter, oldCodex, hadData, completionStarted);", self.source)
+        self.assertIn("notifyTransitions(oldTickTick, oldCodex, hadData, completionStarted);", self.source)
 
 
 if __name__ == "__main__":

@@ -7,9 +7,13 @@ import unittest
 
 from bridge.usb_serial import (
     USB_REQUEST_PREFIX,
+    USB_PAIR_REQUEST_PREFIX,
+    USB_PAIR_RESPONSE_PREFIX,
     USB_RESPONSE_PREFIX,
     UsbSerialResponder,
     build_response,
+    build_pair_response,
+    parse_pair_request,
     parse_request,
 )
 
@@ -17,7 +21,14 @@ from bridge.usb_serial import (
 class UsbSerialProtocolTests(unittest.TestCase):
     def test_protocol_constants_are_ascii_and_versioned(self):
         self.assertEqual(USB_REQUEST_PREFIX, b"M5DASH_USB_V1|GET|")
+        self.assertEqual(USB_PAIR_REQUEST_PREFIX, b"M5DASH_USB_V1|PAIR|")
+        self.assertEqual(USB_PAIR_RESPONSE_PREFIX, b"M5DASH_USB_V1|PAIRED|")
         self.assertEqual(USB_RESPONSE_PREFIX, b"M5DASH_USB_V1|OK|")
+
+    def test_pair_request_returns_the_local_token(self):
+        token = "abcdefghijklmnopqrstuvwxyz_123456"
+        self.assertEqual(parse_pair_request(USB_PAIR_REQUEST_PREFIX + b"M5-ABC123"), "M5-ABC123")
+        self.assertEqual(build_pair_response(token), USB_PAIR_RESPONSE_PREFIX + token.encode() + b"\n")
 
     def test_request_requires_matching_token(self):
         self.assertTrue(parse_request(USB_REQUEST_PREFIX + b"secret-token", "secret-token"))
@@ -25,7 +36,7 @@ class UsbSerialProtocolTests(unittest.TestCase):
         self.assertFalse(parse_request(b"unrelated", "secret-token"))
 
     def test_response_is_compact_single_line_json(self):
-        snapshot = {"ok": True, "printer": {"state_label": "空闲"}}
+        snapshot = {"ok": True, "ticktick": {"stopwatch": {"state": "idle"}}}
         response = build_response(snapshot)
         self.assertTrue(response.startswith(USB_RESPONSE_PREFIX))
         self.assertEqual(response.count(b"\n"), 1)

@@ -18,31 +18,148 @@ class QuotaRingTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-    def test_clock_ai_segments_use_remaining_quota(self):
-        clock_percent = function_source(self.source, "int clockUsagePercent(")
-        self.assertIn(
-            "dashboardRemainingPercent(value)",
-            clock_percent,
-        )
+    def test_clock_uses_multi_ai_daily_total_instead_of_provider_quota(self):
         clock = function_source(self.source, "void drawClockPage(")
-        self.assertIn("clockUsagePercent(claude)", clock)
-        self.assertIn("clockUsagePercent(codex)", clock)
+        self.assertIn("aiUsage.connected && aiUsage.complete", clock)
+        self.assertIn("formatCount(aiUsage.todayTotalTokens)", clock)
+        self.assertIn('" · AI" + usageText', clock)
+        self.assertNotIn("clockUsagePercent", clock)
 
-    def test_individual_ai_pages_keep_their_existing_ring_direction(self):
+    def test_clock_uses_a_distinct_mint_identity_instead_of_ticktick_coral(self):
+        clock = function_source(self.source, "void drawClockPage(")
+        self.assertIn("const uint16_t mint = rgb(24, 229, 161);", clock)
+        self.assertIn("drawEditorialBackdrop(mint);", clock)
+        self.assertIn("drawBatteryStatusAt(mint, ink, 326, 76, false);", clock)
+        self.assertIn("deviceCharging && useChargingAccent", self.source)
+        self.assertIn("canvas.fillCircle(236, 303, 7, mint);", clock)
+        self.assertNotIn("const uint16_t coral = rgb(255, 59, 48);", clock)
+
+    def test_ai_editorial_layout_is_retained_behind_the_regression_gate(self):
+        provider = function_source(self.source, "void drawProviderEditorialPage(")
+        self.assertIn("drawEditorialBackdrop(accent)", provider)
+        self.assertIn("drawEditorialHeader", provider)
+        self.assertIn("drawProviderQuotaHero(mainPercent, ink)", provider)
+        self.assertIn("drawEditorialMetricPill", provider)
+        self.assertIn("drawProviderEditorialFooter", provider)
+        self.assertNotIn("drawRoundScreenBase", provider)
         self.assertIn(
-            "drawRoundScreenBase(background, track, mainPercent, active)",
+            "drawProviderEditorialPage(codex, false)",
             function_source(self.source, "void drawCodexPage("),
         )
         self.assertIn(
-            "drawRoundScreenBase(background, track, mainPercent, active)",
+            "drawProviderEditorialPage(claude, true)",
             function_source(self.source, "void drawClaudePage("),
         )
 
-    def test_printer_progress_keeps_forward_direction(self):
-        printer = function_source(self.source, "void drawPrinterPage(")
-        self.assertIn(
-            "drawRoundScreenBase(background, track, printer.progress, active)", printer
+    def test_provider_percent_uses_the_large_stack_safe_rgba_glyph(self):
+        hero = function_source(self.source, "void drawProviderQuotaHero(")
+        self.assertIn("useEditorialHero104()", hero)
+        self.assertIn("String digits(remainingPercent)", hero)
+        self.assertIn("provider_percent_96_png_height", hero)
+        self.assertIn("canvas.drawPng(provider_percent_96_png", hero)
+        self.assertIn("provider_percent_96_png_width, provider_percent_96_png_height", hero)
+        self.assertNotIn("useEditorialHero80()", hero)
+        self.assertNotIn('canvas.drawString("%"', hero)
+        self.assertNotIn('String(remainingPercent) + "%"', hero)
+        self.assertNotIn("canvas.fillArc", hero)
+        self.assertNotIn("drawThickRoundedLine", hero)
+
+    def test_proven_provider_renderer_remains_as_a_disabled_fallback(self):
+        self.assertIn("constexpr bool kProviderRegressionSafeRenderer = false", self.source)
+        safe = function_source(self.source, "void drawRegressionSafeProviderPage(")
+        self.assertIn("drawRoundScreenBase", safe)
+        self.assertIn("drawFooterPill", safe)
+        self.assertIn("formatDurationCN(mainReset)", safe)
+        codex = function_source(self.source, "void drawCodexPage(")
+        claude = function_source(self.source, "void drawClaudePage(")
+        self.assertIn("drawRegressionSafeProviderPage(codex, false)", codex)
+        self.assertIn("drawRegressionSafeProviderPage(claude, true)", claude)
+
+    def test_editorial_accent_is_antialiased_and_full_screen_overlays_clear_frame_bleed(self):
+        backdrop = function_source(
+            self.source, "void drawEditorialBackdrop(uint16_t accent) {"
         )
+        self.assertIn("canvas.fillSmoothCircle(364, 130, 164, accent)", backdrop)
+        frame = function_source(self.source, "void composeRenderedFrame(")
+        self.assertIn("frameCanvas.fillSmoothCircle", frame)
+        overlay = function_source(self.source, "void drawOverlay(")
+        self.assertIn("overlayMode == OverlayMode::orbit", overlay)
+        self.assertIn("overlayMode == OverlayMode::results", overlay)
+        self.assertIn("editorialFrameAccentActive = false", overlay)
+
+    def test_all_editorial_pages_share_antialiased_capsules(self):
+        self.assertIn(
+            "canvas.fillSmoothRoundRect(x, y, width, height, height / 2, color)",
+            self.source,
+        )
+        self.assertIn("void drawAntialiasedCapsule(", self.source)
+        expected_calls = (
+            "fillAntialiasedCapsule(58, 282, 143, 42, ink)",
+            "drawAntialiasedCapsule(213, 282, 179, 42, background, yellow)",
+            "fillAntialiasedCapsule(x, y, width, height, fill)",
+            "fillAntialiasedCapsule(kEditorialFooterX, kEditorialFooterY",
+            "fillAntialiasedCapsule(kFocusPrimaryActionX, kFocusActionY",
+            "drawAntialiasedCapsule(kFocusEndActionX, kFocusActionY",
+            "fillAntialiasedCapsule(kFeaturePrimaryActionX, kFeatureActionY",
+            "drawAntialiasedCapsule(kFeatureSecondaryActionX, kFeatureActionY",
+        )
+        for call in expected_calls:
+            self.assertIn(call, self.source)
+
+    def test_editorial_provider_icons_use_the_prepared_official_app_assets(self):
+        codex = function_source(self.source, "void drawCodexIcon(")
+        claude = function_source(self.source, "void drawClaudeIcon(")
+        brand = function_source(self.source, "void drawProviderBrandIcon(")
+        self.assertIn("codex_brand_icon_rgb565", codex)
+        self.assertIn("claude_brand_icon_rgb565", claude)
+        self.assertIn("canvas.getSwapBytes()", brand)
+        self.assertIn("canvas.setSwapBytes(true)", brand)
+        self.assertIn("canvas.pushImage", brand)
+        self.assertIn("canvas.setSwapBytes(previousSwap)", brand)
+        self.assertNotIn("iconCanvas", codex)
+        self.assertNotIn("iconCanvas", claude)
+        self.assertNotIn("codex_icon_png", codex)
+        self.assertNotIn("claude_icon_png", claude)
+
+    def test_provider_icons_have_no_intermediate_sprite_or_post_render_refresh(self):
+        self.assertNotIn("M5Canvas iconCanvas", self.source)
+        self.assertNotIn("iconCanvas.createSprite", self.source)
+        animation = function_source(self.source, "void updateCenterIconAnimation(")
+        self.assertIn("Provider icons are intentionally static", animation)
+        self.assertNotIn("drawCodexIcon", animation)
+        self.assertNotIn("drawClaudeIcon", animation)
+
+    def test_provider_reset_uses_vector_arrow_and_compact_shared_format(self):
+        compact = function_source(self.source, "String formatDurationCompact(")
+        self.assertIn('String(days) + "d" + String(hours) + "h"', compact)
+        arrow = function_source(self.source, "void drawProviderResetArrow(")
+        self.assertIn("canvas.fillArc", arrow)
+        self.assertIn("canvas.fillTriangle", arrow)
+        footer = function_source(self.source, "void drawProviderEditorialFooter(")
+        self.assertIn("firstLine = formatDurationCompact(resetMinutes)", footer)
+        self.assertIn("drawProviderResetArrow", footer)
+        self.assertNotIn('String("↺")', footer)
+        self.assertIn('"重置待同步"', footer)
+        self.assertNotIn("周额", footer)
+        self.assertNotIn("后重置", footer)
+
+    def test_focus_page_uses_editorial_poster_layout_instead_of_dashboard_ring(self):
+        focus = function_source(self.source, "void drawFocusPage(")
+        self.assertNotIn("drawRoundScreenBase", focus)
+        self.assertIn("drawEditorialBackdrop(coral)", focus)
+        self.assertIn("drawFocusHeroTime(heroValue, ink)", focus)
+        self.assertIn('drawFocusModeOption(52, 175, "A", "正计时"', focus)
+        self.assertIn('drawFocusModeOption(225, 175, "B", "25分钟"', focus)
+        self.assertIn("drawFocusActions", focus)
+
+    def test_focus_touch_buttons_dispatch_the_current_timer_mode(self):
+        touch = function_source(self.source, "void finishTouchGesture(")
+        self.assertIn("dashboardFocusTouchTarget(designX, designY)", touch)
+        self.assertIn('"stopwatch-click"', touch)
+        self.assertIn('"countdown-click"', touch)
+        self.assertIn('"stopwatch-end"', touch)
+        self.assertIn('"countdown-end"', touch)
+        self.assertIn("performTickTickAction(action)", touch)
 
 
 if __name__ == "__main__":

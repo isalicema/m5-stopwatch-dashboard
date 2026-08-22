@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, Optional
 
 
 USB_REQUEST_PREFIX = b"M5DASH_USB_V1|GET|"
+USB_PAIR_REQUEST_PREFIX = b"M5DASH_USB_V1|PAIR|"
+USB_PAIR_RESPONSE_PREFIX = b"M5DASH_USB_V1|PAIRED|"
 USB_RESPONSE_PREFIX = b"M5DASH_USB_V1|OK|"
 USB_ERROR_RESPONSE = b"M5DASH_USB_V1|ERR|unauthorized\n"
 MAX_REQUEST_BYTES = 512
@@ -22,6 +24,27 @@ def parse_request(line: bytes, api_token: str) -> bool:
         return False
     supplied = line[len(USB_REQUEST_PREFIX) :].decode("utf-8", errors="replace")
     return hmac.compare_digest(supplied, api_token)
+
+
+def parse_pair_request(line: bytes) -> Optional[str]:
+    if not line.startswith(USB_PAIR_REQUEST_PREFIX):
+        return None
+    device_id = line[len(USB_PAIR_REQUEST_PREFIX) :].decode("ascii", errors="ignore")
+    if not device_id or len(device_id) > 64:
+        return None
+    if any(not (character.isalnum() or character in "-_:.") for character in device_id):
+        return None
+    return device_id
+
+
+def build_pair_response(api_token: str) -> bytes:
+    encoded = api_token.encode("ascii", errors="strict")
+    if not 16 <= len(encoded) <= 128 or any(
+        not (byte in b"-_" or 48 <= byte <= 57 or 65 <= byte <= 90 or 97 <= byte <= 122)
+        for byte in encoded
+    ):
+        raise ValueError("USB pairing requires a 16-128 character URL-safe token")
+    return USB_PAIR_RESPONSE_PREFIX + encoded + b"\n"
 
 
 def build_response(snapshot: Dict[str, Any]) -> bytes:
@@ -116,7 +139,11 @@ class UsbSerialResponder(threading.Thread):
                     raw, _, remainder = buffer.partition(b"\n")
                     buffer = bytearray(remainder)
                     line = raw.rstrip(b"\r")
-                    if parse_request(line, self.api_token):
+                    device_id = parse_pair_request(line)
+                    if device_id is not None:
+                        _write_all(fd, build_pair_response(self.api_token))
+                        print("M5 USB dashboard paired with %s" % device_id, flush=True)
+                    elif parse_request(line, self.api_token):
                         if not authenticated:
                             print("M5 USB dashboard client authenticated", flush=True)
                             authenticated = True

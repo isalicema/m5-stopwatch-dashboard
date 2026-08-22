@@ -75,7 +75,7 @@ class PeerStateTests(unittest.TestCase):
         self.assertEqual(merged["results"][0]["title"], "iMac · 远端完成")
 
     def test_dashboard_removes_disconnected_peer_activity_immediately(self):
-        state = DashboardState("P2S", device_label="Air", aggregate_peers=True)
+        state = DashboardState("Air", aggregate_peers=True)
         state.set_codex(
             {
                 "connected": True,

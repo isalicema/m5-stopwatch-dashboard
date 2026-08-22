@@ -1,9 +1,13 @@
 #include <cassert>
 
+#include "../firmware/M5Dashboard/app_shell_logic.h"
 #include "../firmware/M5Dashboard/icon_animation.h"
 #include "../firmware/M5Dashboard/interaction_logic.h"
 
 int main() {
+  assert(dashboardUsbPairingTokenValid("abcdefghijklmnopqrstuvwxyz_123456", 33));
+  assert(!dashboardUsbPairingTokenValid("too-short", 9));
+  assert(!dashboardUsbPairingTokenValid("abcdefghijklmnop|bad", 20));
   assert(classifyDashboardGesture(8, 7, 100, 450, 18) == DashboardGesture::none);
   assert(classifyDashboardGesture(-80, 12, 100, 450, 18) == DashboardGesture::page);
   assert(classifyDashboardGesture(9, -60, 100, 450, 18) ==
@@ -21,43 +25,198 @@ int main() {
   assert(shouldToggleVoiceSessionOnRelease(true, false));
   assert(!shouldToggleVoiceSessionOnRelease(true, true));
   assert(!shouldToggleVoiceSessionOnRelease(false, false));
+  assert(dashboardTypelessUsbAvailable(true, true, true, true));
+  assert(!dashboardTypelessUsbAvailable(true, false, true, true));
+  assert(!dashboardTypelessUsbAvailable(true, true, false, true));
+  assert(dashboardClockRefresh(8, 8, 60, 60) == DashboardClockRefresh::none);
+  assert(dashboardClockRefresh(9, 8, 60, 60) ==
+         DashboardClockRefresh::secondsOnly);
+  assert(dashboardClockRefresh(0, 59, 61, 60) ==
+         DashboardClockRefresh::fullPage);
+  assert(dashboardClockRefresh(8, -1, 60, -1) ==
+         DashboardClockRefresh::fullPage);
+  assert(!dashboardTypelessUsbAvailable(true, true, true, false));
+  assert(!dashboardTypelessUsbAvailable(false, true, true, true));
+
+  assert(dashboardRectInsideCircle(kFocusStatusX, kFocusStatusBoundsY,
+                                   kFocusStatusBoundsWidth,
+                                   kFocusStatusBoundsHeight, 225, 225, 209));
+  assert(dashboardRectInsideCircle(kFocusPrimaryActionX, kFocusActionY,
+                                   kFocusPrimaryActionWidth, kFocusActionHeight,
+                                   225, 225, 209));
+  assert(dashboardRectInsideCircle(kFocusEndActionX, kFocusActionY,
+                                   kFocusEndActionWidth, kFocusActionHeight,
+                                   225, 225, 209));
+  assert(dashboardRectInsideCircle(kFocusPrimaryTouchX, kFocusActionTouchY,
+                                   kFocusPrimaryTouchWidth, kFocusActionTouchHeight,
+                                   225, 225, 225));
+  assert(dashboardRectInsideCircle(kFocusEndTouchX, kFocusActionTouchY,
+                                   kFocusEndTouchWidth, kFocusActionTouchHeight,
+                                   225, 225, 225));
+  assert(dashboardFocusTouchTarget(180, 370) ==
+         DashboardFocusTouchTarget::primary);
+  assert(dashboardFocusTouchTarget(320, 370) ==
+         DashboardFocusTouchTarget::end);
+  assert(dashboardFocusTouchTarget(225, 330) == DashboardFocusTouchTarget::none);
+  assert(dashboardFocusTouchTarget(90, 390) == DashboardFocusTouchTarget::none);
+
+  assert(dashboardRectInsideCircle(kEditorialHeaderX, kEditorialHeaderBoundsY,
+                                   kEditorialHeaderBoundsWidth,
+                                   kEditorialHeaderBoundsHeight, 225, 225, 209));
+  assert(dashboardRectInsideCircle(kClockOrbitActionX, kClockActionY,
+                                   kClockActionWidth, kClockActionHeight,
+                                   225, 225, 209));
+  assert(dashboardRectInsideCircle(kClockResultsActionX, kClockActionY,
+                                   kClockActionWidth, kClockActionHeight,
+                                   225, 225, 209));
+  assert(dashboardClockTouchTarget(150, 370) ==
+         DashboardClockTouchTarget::orbit);
+  assert(dashboardClockTouchTarget(300, 370) ==
+         DashboardClockTouchTarget::results);
+  assert(dashboardClockTouchTarget(150, 303) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardClockTouchTarget(300, 303) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardClockTouchTarget(150, 324) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardClockTouchTarget(300, 324) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardClockTouchTarget(150, 339) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardClockTouchTarget(225, 320) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardRectInsideCircle(kProviderIconX - kProviderIconTouchExpansion,
+                                   kProviderIconY - kProviderIconTouchExpansion,
+                                   kProviderIconSize + 2 * kProviderIconTouchExpansion,
+                                   kProviderIconSize + 2 * kProviderIconTouchExpansion,
+                                   225, 225, 225));
+  assert(dashboardPointInExpandedRect(310, 170, kProviderIconX, kProviderIconY,
+                                      kProviderIconSize, kProviderIconSize,
+                                      kProviderIconTouchExpansion));
+  assert(!dashboardPointInExpandedRect(270, 120, kProviderIconX, kProviderIconY,
+                                       kProviderIconSize, kProviderIconSize,
+                                       kProviderIconTouchExpansion));
+  assert(dashboardVoiceTouchTarget(225, 200));
+  assert(dashboardVoiceTouchTarget(62, 94));
+  assert(!dashboardVoiceTouchTarget(40, 200));
+  assert(dashboardVoiceTouchTarget(225, 360));
+  assert(!dashboardVoiceTouchTarget(80, 370));
+
+  DashboardClickButtonState click;
+  assert(queueDashboardClick(click, 100, 360) == DashboardClickAction::none);
+  assert(flushDashboardClick(click, 459, 360) == DashboardClickAction::none);
+  assert(flushDashboardClick(click, 460, 360) == DashboardClickAction::singleClick);
+  assert(queueDashboardClick(click, 1000, 360) == DashboardClickAction::none);
+  assert(queueDashboardClick(click, 1200, 360) == DashboardClickAction::doubleClick);
+  assert(flushDashboardClick(click, 1600, 360) == DashboardClickAction::none);
+
+  assert(dashboardHomePageDelta(0) == 0);
+  for (int page = 1; page < 7; ++page) {
+    assert(page + dashboardHomePageDelta(page) == 0);
+  }
+
+  click = {};
+  uint32_t clickWrap = UINT32_MAX - 100;
+  assert(queueDashboardClick(click, clickWrap, 360) == DashboardClickAction::none);
+  assert(flushDashboardClick(click, 259, 360) == DashboardClickAction::singleClick);
 
   DashboardPowerButtonState power;
-  assert(updateDashboardPowerButton(power, true, 100, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 180, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 679, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, false, 679, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 680, 500, 1500) ==
-         DashboardPowerAction::toggleStandby);
+  assert(updateDashboardPowerButton(power, false, 680, 1500, 500, 1600, false) ==
+         DashboardPowerAction::toggleScreen);
 
   power = {};
-  assert(updateDashboardPowerButton(power, true, 1000, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 1060, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, true, 1250, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, true, 400, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 1310, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, false, 470, 1500, 500, 1600, false) ==
+         DashboardPowerAction::openLauncher);
+
+  power = {};
+  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 1600, false) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 1600, false) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, true, 400, 1500, 500, 1600, false) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, true, 2000, 1500, 500, 1600, false) ==
          DashboardPowerAction::powerOff);
-  assert(updateDashboardPowerButton(power, false, 1800, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, false, 2100, 1500, 500, 1600, false) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, false, 2600, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
 
   power = {};
-  assert(updateDashboardPowerButton(power, true, 2000, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, true, 1000, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 4000, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, true, 2600, 1500, 500, 1600, false) ==
+         DashboardPowerAction::powerOff);
+  assert(updateDashboardPowerButton(power, false, 2700, 1500, 500, 1600, false) ==
+         DashboardPowerAction::none);
+
+  power = {};
+  assert(updateDashboardPowerButton(power, true, 2000, 1500, 500, 1600, true) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, true, 3600, 1500, 500, 1600, true) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, false, 3700, 1500, 500, 1600, true) ==
          DashboardPowerAction::none);
 
   power = {};
   uint32_t nearWrap = UINT32_MAX - 100;
-  assert(updateDashboardPowerButton(power, true, nearWrap, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, true, nearWrap, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, nearWrap + 50, 500, 1500) ==
+  assert(updateDashboardPowerButton(power, false, nearWrap + 50, 1500, 500, 1600, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 449, 500, 1500) ==
-         DashboardPowerAction::toggleStandby);
+  assert(updateDashboardPowerButton(power, false, 449, 1500, 500, 1600, false) ==
+         DashboardPowerAction::toggleScreen);
+
+  LocalStopwatchModel localStopwatch;
+  assert(localStopwatch.state == LocalStopwatchState::stopped);
+  localStopwatchLeftAction(localStopwatch, 100);
+  assert(localStopwatch.state == LocalStopwatchState::stopped);
+  localStopwatchRightAction(localStopwatch, 100);
+  assert(localStopwatch.state == LocalStopwatchState::running);
+  assert(localStopwatchElapsedMs(localStopwatch, 3100) == 3000);
+  localStopwatchLeftAction(localStopwatch, 3100);
+  assert(localStopwatch.lapCount == 1);
+  assert(localStopwatch.laps[0] == 3000);
+  assert(localStopwatchMaximumLapOffset(1) == 0);
+  assert(localStopwatchLapPageOffset(0, 1, 1) == 0);
+  localStopwatchRightAction(localStopwatch, 5100);
+  assert(localStopwatch.state == LocalStopwatchState::paused);
+  assert(localStopwatch.accumulatedMs == 5000);
+  assert(localStopwatchElapsedMs(localStopwatch, 9000) == 5000);
+  localStopwatchRightAction(localStopwatch, 9000);
+  assert(localStopwatch.state == LocalStopwatchState::running);
+  assert(localStopwatchElapsedMs(localStopwatch, 10000) == 6000);
+  localStopwatchRightAction(localStopwatch, 10000);
+  assert(localStopwatch.state == LocalStopwatchState::paused);
+  localStopwatchLeftAction(localStopwatch, 10001);
+  assert(localStopwatch.state == LocalStopwatchState::stopped);
+  assert(localStopwatchElapsedMs(localStopwatch, 12000) == 0);
+  assert(localStopwatch.lapCount == 0);
+  assert(appLauncherTouchTarget(137, 222) == AppShellTouchTarget::dashboard);
+  assert(appLauncherTouchTarget(313, 222) == AppShellTouchTarget::stopwatch);
+  assert(appLauncherTouchTarget(225, 100) == AppShellTouchTarget::none);
+  assert(localStopwatchTouchTarget(150, 90) == AppShellTouchTarget::leftAction);
+  assert(localStopwatchTouchTarget(299, 90) == AppShellTouchTarget::rightAction);
+  assert(localStopwatchMaximumLapOffset(5) == 2);
+  assert(localStopwatchFirstVisibleLap(5, 0) == 2);
+  assert(localStopwatchLapPageOffset(0, 1, 5) == 2);
+  assert(localStopwatchFirstVisibleLap(5, 2) == 0);
+  assert(localStopwatchLapPageOffset(2, -1, 5) == 0);
+  assert(localStopwatchLapPageOffset(0, -1, 5) == 0);
+  assert(localStopwatchLapRegionContains(225, 320));
+  assert(!localStopwatchLapRegionContains(225, 240));
 
   assert(!usbReplyPending(1000, 0, 500));
   assert(usbReplyPending(1200, 1000, 500));
@@ -91,6 +250,19 @@ int main() {
   assert(dashboardTranscriptOffset(1, 5, 6, 4) == 2);
   assert(dashboardTranscriptOffset(1, -5, 6, 4) == 0);
   assert(dashboardTranscriptOffset(0, 1, 3, 4) == 0);
+
+  assert(dashboardFeatureTouchTarget(120, 360, false) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardFeatureTouchTarget(300, 360, false) ==
+         DashboardFeatureTouchTarget::secondary);
+  assert(dashboardFeatureTouchTarget(300, 140, true) ==
+         DashboardFeatureTouchTarget::hero);
+  assert(dashboardFeatureTouchTarget(300, 140, false) ==
+         DashboardFeatureTouchTarget::none);
+  assert(!dashboardShakeDetected(false, 1.0f, 0.0f, 0.0f, 1000, 0, 900, 0.78f));
+  assert(!dashboardShakeDetected(true, 1.0f, 0.0f, 0.0f, 850, 0, 900, 0.78f));
+  assert(dashboardShakeDetected(true, 0.8f, 0.0f, 0.0f, 1000, 0, 900, 0.78f));
+  assert(!dashboardShakeDetected(true, 0.5f, 0.2f, 0.1f, 1000, 0, 900, 0.78f));
 
   assert(selectDashboardCodexIconMode(false, 1, 1, 1, true) ==
          DashboardCodexIconMode::idle);

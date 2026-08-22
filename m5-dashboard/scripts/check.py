@@ -21,15 +21,19 @@ def main() -> int:
     except (OSError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         print("Bridge check failed: %s" % exc)
         return 1
-    printer = state.get("printer") or {}
+    ticktick = state.get("ticktick") or {}
+    stopwatch = ticktick.get("stopwatch") or {}
+    countdown = ticktick.get("countdown") or {}
     codex = state.get("codex") or {}
+    ai_usage = state.get("ai_usage") or {}
     print(
-        "P2S: connected=%s state=%s progress=%s%% remaining=%sm"
+        "TickTick: connected=%s stopwatch=%s/%ss countdown=%s/%ss"
         % (
-            printer.get("connected"),
-            printer.get("state_label"),
-            printer.get("progress"),
-            printer.get("remaining_min"),
+            ticktick.get("connected"),
+            stopwatch.get("state"),
+            stopwatch.get("elapsed_seconds"),
+            countdown.get("state"),
+            countdown.get("remaining_seconds"),
         )
     )
     print(
@@ -46,6 +50,20 @@ def main() -> int:
             "Limit %s: %s%% used, reset=%s"
             % (limit.get("id"), limit.get("used_percent"), limit.get("resets_at"))
         )
+    print(
+        "AI usage: connected=%s complete=%s today_total=%s today_auth=%s channels=%s"
+        % (
+            ai_usage.get("connected"),
+            ai_usage.get("complete"),
+            ai_usage.get("today_total_tokens"),
+            ai_usage.get("today_authoritative_tokens"),
+            ",".join(
+                str(item.get("id"))
+                for item in ai_usage.get("channels") or []
+                if isinstance(item, dict)
+            ),
+        )
+    )
     return 0
 
 

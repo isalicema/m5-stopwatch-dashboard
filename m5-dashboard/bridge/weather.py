@@ -82,6 +82,25 @@ def fetch_weather(config: Dict[str, Any]) -> Dict[str, Any]:
     return normalize_weather(payload, city)
 
 
+def weather_failure_state(
+    last: Dict[str, Any], city: str, error: BaseException
+) -> Dict[str, Any]:
+    """Keep the last good conditions visible across a transient provider error."""
+    failed = dict(last)
+    failed.setdefault("available", False)
+    failed.setdefault("city", city)
+    failed["error"] = str(error)[:160]
+    return failed
+
+
+def weather_poll_delay(config: Dict[str, Any], success: bool) -> int:
+    refresh_seconds = max(3600, int(config.get("refresh_seconds", 3600)))
+    if success:
+        return refresh_seconds
+    retry_seconds = max(15, int(config.get("retry_seconds", 60)))
+    return min(refresh_seconds, retry_seconds)
+
+
 class WeatherMonitor(threading.Thread):
     daemon = True
 
@@ -95,17 +114,17 @@ class WeatherMonitor(threading.Thread):
         self._stop_event.set()
 
     def run(self) -> None:
-        refresh_seconds = max(3600, int(self.config.get("refresh_seconds", 3600)))
         last: Dict[str, Any] = {}
         while not self._stop_event.is_set():
+            success = False
             try:
                 last = fetch_weather(self.config)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
-                failed = dict(last)
-                failed.setdefault("available", False)
-                failed.setdefault("city", str(self.config.get("city") or "苏州"))
-                failed["error"] = str(exc)[:160]
+                failed = weather_failure_state(
+                    last, str(self.config.get("city") or "苏州"), exc
+                )
                 self.on_state(failed)
             else:
+                success = True
                 self.on_state(last)
-            self._stop_event.wait(refresh_seconds)
+            self._stop_event.wait(weather_poll_delay(self.config, success))

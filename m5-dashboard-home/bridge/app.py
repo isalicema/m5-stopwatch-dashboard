@@ -14,7 +14,6 @@ from urllib.parse import urlparse
 from .claude_client import ClaudeMonitor
 from .codex_client import CodexMonitor
 from .discovery import DiscoveryResponder
-from .mqtt_client import BambuMonitor
 from .state import DashboardState
 from .usb_serial import UsbSerialResponder
 from .weather import WeatherMonitor
@@ -70,21 +69,16 @@ def build_handler(state: DashboardState, api_token: str) -> type[BaseHTTPRequest
 
 
 def main(argv: Optional[list[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="P2S + Codex bridge for M5Stack StopWatch")
+    parser = argparse.ArgumentParser(description="Codex + Claude companion bridge for M5Stack StopWatch")
     parser.add_argument("--config", default="config.json", help="path to config.json")
     args = parser.parse_args(argv)
     config = load_config(Path(args.config).expanduser().resolve())
-    bambu_config = config.get("bambu") or {}
     codex_config = config.get("codex") or {}
     claude_config = config.get("claude") or {}
     weather_config = config.get("weather") or {}
-    dashboard = DashboardState(str(bambu_config.get("name") or "P2S"))
+    dashboard = DashboardState()
     workers: list[Any] = []
 
-    if bambu_config.get("enabled"):
-        monitor = BambuMonitor(bambu_config, dashboard.merge_printer, dashboard.set_printer_connected)
-        monitor.start()
-        workers.append(monitor)
     if codex_config.get("enabled", True):
         monitor = CodexMonitor(codex_config, dashboard.set_codex)
         monitor.start()

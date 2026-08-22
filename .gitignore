@@ -22,6 +22,8 @@
 **/tmp/
 **/design-preview/
 **/NotoSansCJKsc-Regular.otf
+**/NotoSansCJKsc-Medium.otf
+**/NotoSansCJKsc-Bold.otf
 
 # Local investigation logs are intentionally not published
 /任务记录_*.md

@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 _MAX_TRACKED_MESSAGES = 32
-_MAX_PUBLIC_TASKS = 2
+_MAX_PUBLIC_TASKS = 3
 _MAX_PUBLIC_MESSAGES = 6
 _MAX_PUBLIC_CHARS = 240
 _MAX_PUBLIC_RESULTS = 6
@@ -58,7 +58,7 @@ def _content_text(content: Any, allowed_types: set[str]) -> str:
 
 
 class _TranscriptTracker:
-    def __init__(self, root: str, stale_seconds: int = 1800, max_files: int = 12) -> None:
+    def __init__(self, root: str, stale_seconds: int = 1800, max_files: int = 24) -> None:
         self.root = Path(root).expanduser()
         self.stale_seconds = max(30, int(stale_seconds))
         self.max_files = max(1, int(max_files))
@@ -153,8 +153,6 @@ class _TranscriptTracker:
         raise NotImplementedError
 
     def snapshots(self, expose: bool = False) -> List[Dict[str, Any]]:
-        if not expose:
-            return []
         now = datetime.now().timestamp()
         for path in self._recent_paths(now):
             self._advance(path)
@@ -175,21 +173,27 @@ class _TranscriptTracker:
         output = []
         for index, state in enumerate(active[:_MAX_PUBLIC_TASKS], 1):
             messages = []
-            for message in state.get("messages", [])[-_MAX_PUBLIC_MESSAGES:]:
-                role = "user" if message.get("role") == "user" else "assistant"
-                messages.append(
-                    {
-                        "role": role,
-                        "text": _public_text(str(message.get("text") or ""), role),
-                        "updated_at": int(message.get("updated_at") or 0),
-                    }
-                )
-            title = _clean_text(state.get("title")) or self._fallback_title(state, index)
+            if expose:
+                for message in state.get("messages", [])[-_MAX_PUBLIC_MESSAGES:]:
+                    role = "user" if message.get("role") == "user" else "assistant"
+                    messages.append(
+                        {
+                            "role": role,
+                            "text": _public_text(str(message.get("text") or ""), role),
+                            "updated_at": int(message.get("updated_at") or 0),
+                        }
+                    )
+            title = (
+                _clean_text(state.get("title"))
+                if expose
+                else self._fallback_title(state, index)
+            ) or self._fallback_title(state, index)
             output.append(
                 {
                     "id": str(state.get("session_id") or "")[-8:],
                     "title": _public_text(title, "user")[:36],
                     "status": "working",
+                    "content_visible": expose,
                     "updated_at": int(
                         max(
                             float(state.get("last_event") or 0),

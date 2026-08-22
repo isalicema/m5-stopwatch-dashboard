@@ -1,0 +1,15 @@
+{
+  "font_name": "Noto Sans S Chinese Medium",
+  "font_marker": "M5DASH_FONT_EDITORIAL_MEDIUM_14_V1",
+  "identity_verified": true,
+  "pixel_size": 14,
+  "glyph_count": 230,
+  "first_codepoint": 32,
+  "last_codepoint": 40614,
+  "vlw_size": 44035,
+  "vlw_sha256": "c4dc5338facddb02e15c76546029e701955bbfb18fbff089bd3e5546b3d21556",
+  "source_file": "NotoSansCJKsc-Medium.otf",
+  "source_sha256": "25033438cfa41f1873d4902b8555956557b765117756bcef96406e023e49578c",
+  "required_probe_glyphs": "",
+  "embedded_storage": "direct_flash_vlw"
+}

@@ -1,0 +1,15 @@
+{
+  "font_name": "Noto Sans CJK SC Regular",
+  "font_marker": "M5DASH_STOPWATCH_FONT_NOTO_SANS_CJK_SC_56_V1",
+  "identity_verified": true,
+  "pixel_size": 56,
+  "glyph_count": 12,
+  "first_codepoint": 46,
+  "last_codepoint": 58,
+  "vlw_size": 14050,
+  "vlw_sha256": "79dfb81b4aa1403ade3580e16f0e4dde442027292afa7d3c3804f352be0cd808",
+  "source_file": "NotoSansCJKsc-Regular.otf",
+  "source_sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+  "required_probe_glyphs": "",
+  "embedded_storage": "direct_flash_vlw"
+}

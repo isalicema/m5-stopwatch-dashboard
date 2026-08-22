@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import plistlib
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -30,12 +32,13 @@ def paths() -> Dict[str, Path]:
         "target": target,
         "installed_app": target / "app",
         "config": target / "config.json",
-        "credentials": target / "bambu-cloud.json",
         "hooks": Path.home() / ".codex/hooks.json",
         "launch_agent": Path.home() / "Library/LaunchAgents" / (LAUNCH_LABEL + ".plist"),
         "audio_launch_agent": Path.home() / "Library/LaunchAgents" / (AUDIO_LAUNCH_LABEL + ".plist"),
         "typeless_settings": Path.home() / "Library/Application Support/Typeless/app-settings.json",
         "audio_helper": target / "bin/m5_audio_input",
+        "typeless_helper": target / "TypelessKeySender.app/Contents/MacOS/TypelessKeySender",
+        "typeless_helper_info": target / "TypelessKeySender.app/Contents/Info.plist",
     }
 
 
@@ -62,10 +65,6 @@ def copy_app(p: Dict[str, Path]) -> None:
         shutil.copy2(source_config, p["config"])
     elif not p["config"].exists():
         shutil.copy2(p["project"] / "config.example.json", p["config"])
-    bundled_credentials = p["project"] / "dist/M5Workstation/private/bambu-cloud.json"
-    if bundled_credentials.exists() and not p["credentials"].exists():
-        shutil.copy2(bundled_credentials, p["credentials"])
-        p["credentials"].chmod(0o600)
     _normalize_installed_config(p)
 
 
@@ -76,17 +75,71 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit("Cannot read installed config %s: %s" % (p["config"], exc))
 
-    bambu = config.setdefault("bambu", {})
-    bambu["credentials_file"] = str(p["credentials"])
+    config.pop("bambu", None)
+    server = config.setdefault("server", {})
+    token = str(server.get("api_token") or "")
+    if not token or token == "CHANGE_ME_TO_A_LONG_RANDOM_VALUE":
+        server["api_token"] = secrets.token_urlsafe(32)
+    server.setdefault("usb_enabled", True)
+    ticktick = config.setdefault("ticktick", {})
+    ticktick.setdefault("enabled", True)
+    ticktick.setdefault("base_url", "http://127.0.0.1:8787")
+    ticktick.setdefault("duration_seconds", 1500)
+    typeless = config.setdefault("typeless", {})
+    typeless.setdefault("enabled", True)
+    typeless["helper_path"] = str(
+        p.get("typeless_helper")
+        or p["target"] / "TypelessKeySender.app/Contents/MacOS/TypelessKeySender"
+    )
+    typeless.setdefault("shortcut", "ctrl-cmd-shift-space")
+    typeless.setdefault("command_timeout_seconds", 5)
+    typeless.setdefault("startup_delay_seconds", 1.0)
     codex = config.setdefault("codex", {})
     codex["hook_state_path"] = str(p["target"] / "codex_hooks.json")
-    # This private two-location installation intentionally mirrors only visible
-    # user/assistant text. Reasoning and tool payloads are filtered in the bridge.
-    codex["expose_transcript"] = True
+    # Keep transcript sharing opt-in. A copied package must not silently widen
+    # what this Mac exposes to the dashboard.
+    codex.setdefault("expose_transcript", False)
     codex.setdefault("transcript_refresh_seconds", 1)
     claude = config.setdefault("claude", {})
-    claude["expose_transcript"] = True
-    claude["activity_refresh_seconds"] = 1
+    example_source = claude.get("source") if isinstance(claude.get("source"), dict) else {}
+    if str(example_source.get("base_url") or "").startswith("http://IMAC-IP:"):
+        claude.pop("source", None)
+        claude["enabled"] = True
+        claude["local_only"] = True
+    claude.setdefault("expose_transcript", False)
+    claude.setdefault("activity_refresh_seconds", 1)
+    ai_usage = config.setdefault("ai_usage", {})
+    ai_usage.setdefault("enabled", True)
+    ai_usage.setdefault("base_url", "http://127.0.0.1:8177")
+    ai_usage.setdefault("timezone", "Asia/Shanghai")
+    ai_usage.setdefault("refresh_seconds", 30)
+    ai_usage.setdefault("timeout_seconds", 10)
+    ai_usage.setdefault("quota_timeout_seconds", 30)
+    ai_hotspot = config.setdefault("ai_hotspot", {})
+    ai_hotspot.setdefault("enabled", True)
+    ai_hotspot.setdefault("refresh_seconds", 60)
+    ai_hotspot.setdefault(
+        "state_path", str(p["target"] / "ai_hotspots.json")
+    )
+    ai_hotspot.setdefault(
+        "keywords",
+        ["Codex", "GPT", "OpenAI", "Claude", "Anthropic", "Gemini", "发布", "重置", "上线"],
+    )
+    ai_hotspot.setdefault(
+        "sources",
+        [
+            {"name": "OpenAI", "url": "https://openai.com/news/rss.xml"},
+            {"name": "Google AI", "url": "https://blog.google/technology/ai/rss/"},
+        ],
+    )
+    obsidian = config.setdefault("obsidian", {})
+    obsidian.setdefault("enabled", True)
+    obsidian.setdefault("roots", [str(Path.home() / "Smart Workspace")])
+    obsidian.setdefault(
+        "exclude_names", [".obsidian", ".trash", ".git", "node_modules", "Alice Writing"]
+    )
+    obsidian.setdefault("refresh_seconds", 900)
+    obsidian.setdefault("max_files", 5000)
 
     configured = Path(os.path.expanduser(str(codex.get("codex_binary") or "")))
     if not configured.is_file():
@@ -104,6 +157,7 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
             codex["codex_binary"] = str(replacement)
 
     _atomic_json_write(p["config"], config)
+    p["config"].chmod(0o600)
 
 
 def _backup(path: Path) -> None:
@@ -184,7 +238,7 @@ def copy_peer_app(p: Dict[str, Path], enable_usb: bool = False) -> None:
             raise SystemExit("The private shared bridge token is not configured")
         config = {
             "server": {"bind": "0.0.0.0", "port": 8765, "api_token": token},
-            "bambu": {"enabled": False, "name": "P2S"},
+            "ticktick": {"enabled": False},
             "weather": {"enabled": False},
             "codex": {"enabled": True},
             "claude": {"enabled": True},
@@ -241,7 +295,8 @@ def copy_peer_app(p: Dict[str, Path], enable_usb: bool = False) -> None:
             "expose_transcript": True,
         }
     )
-    config.setdefault("bambu", {})["enabled"] = False
+    config.pop("bambu", None)
+    config.setdefault("ticktick", {})["enabled"] = False
     config.setdefault("weather", {})["enabled"] = False
     config["peers"] = []
     _atomic_json_write(p["config"], config)
@@ -435,7 +490,7 @@ def _updated_typeless_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     settings["enabledMuteBackgroundAudio"] = False
     settings["launchAtSystemStartup"] = True
     bindings = settings.setdefault("featureShortcutBindings", {})
-    bindings["dictationMode"] = ["Fn"]
+    bindings["dictationMode"] = ["Fn", "LeftCtrl+LeftCmd+LeftShift+Space"]
     return settings
 
 
@@ -457,14 +512,200 @@ def configure_typeless(p: Dict[str, Path]) -> None:
     print("Configured Typeless: system-default microphone, Fn shortcut, startup enabled.")
 
 
-def install_audio_agent(p: Dict[str, Path]) -> None:
+def _audio_helper_prerequisites(p: Dict[str, Path]) -> Dict[str, Path]:
     bundled = p["project"] / "dist/M5Workstation/m5_audio_input"
-    if not bundled.exists():
-        raise SystemExit("Missing audio helper: %s" % bundled)
+    if bundled.is_file():
+        return {"bundled": bundled}
+
+    source = p["project"] / "mac/M5AudioInput.c"
+    if not source.is_file():
+        raise SystemExit(
+            "Missing both the bundled audio helper and its source: %s" % source
+        )
+    compiler = shutil.which("clang")
+    if not compiler:
+        raise SystemExit(
+            "Cannot build the M5 audio helper because clang is unavailable. "
+            "Install the Xcode Command Line Tools first."
+        )
+    return {"source": source, "compiler": Path(compiler)}
+
+
+def _typeless_helper_prerequisites(p: Dict[str, Path]) -> Dict[str, Path]:
+    source = p["project"] / "mac/TypelessKeySender.c"
+    if not source.is_file():
+        raise SystemExit("Missing Typeless key helper source: %s" % source)
+    compiler = shutil.which("clang")
+    if not compiler:
+        raise SystemExit(
+            "Cannot build the Typeless key helper because clang is unavailable. "
+            "Install the Xcode Command Line Tools first."
+        )
+    return {"source": source, "compiler": Path(compiler)}
+
+
+def preflight_typeless_install(p: Dict[str, Path]) -> None:
+    """Reject predictable failures before --all changes hooks or agents."""
+    settings_file = p["typeless_settings"]
+    if not settings_file.is_file():
+        raise SystemExit(
+            "Typeless has not created its settings yet. Open Typeless once, sign in, "
+            "approve the macOS microphone prompt, then run this installer again."
+        )
+    try:
+        json.loads(settings_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit("Refusing to edit invalid %s: %s" % (settings_file, exc))
+    _audio_helper_prerequisites(p)
+    _typeless_helper_prerequisites(p)
+
+
+def install_typeless_key_sender(p: Dict[str, Path]) -> None:
+    inputs = _typeless_helper_prerequisites(p)
+    helper = p["typeless_helper"]
+    info = p["typeless_helper_info"]
+    app_bundle = helper.parents[2]
+    marker = app_bundle.parent / ".TypelessKeySender.source-sha256"
+    fingerprint = hashlib.sha256(
+        b"m5-typeless-helper-v1\0"
+        + inputs["source"].read_bytes()
+        + b"\0-O2-Wall-Wextra-ApplicationServices"
+    ).hexdigest()
+
+    if helper.is_file() and info.is_file():
+        try:
+            installed_fingerprint = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            installed_fingerprint = ""
+        if installed_fingerprint == fingerprint:
+            print("Typeless key helper is already current; preserved its Accessibility identity.")
+            return
+        if not installed_fingerprint:
+            # Migration for helpers installed before the external build marker
+            # existed. Keep the already working signed bundle byte-for-byte;
+            # replacing or even re-signing it changes its ad-hoc CDHash and
+            # invalidates macOS Accessibility approval.
+            marker.write_text(fingerprint + "\n", encoding="utf-8")
+            print("Preserved the existing Typeless key helper and recorded its source fingerprint.")
+            return
+
+    signer = shutil.which("codesign") or "/usr/bin/codesign"
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    temporary = helper.with_name(helper.name + ".tmp-%d" % os.getpid())
+    try:
+        subprocess.run(
+            [
+                str(inputs["compiler"]),
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                str(inputs["source"]),
+                "-framework",
+                "ApplicationServices",
+                "-o",
+                str(temporary),
+            ],
+            check=True,
+        )
+        os.replace(temporary, helper)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit("Failed to build the Typeless key helper: %s" % exc)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    helper.chmod(0o755)
+    info.parent.mkdir(parents=True, exist_ok=True)
+    with info.open("wb") as target:
+        plistlib.dump(
+            {
+                "CFBundleDevelopmentRegion": "zh_CN",
+                "CFBundleExecutable": "TypelessKeySender",
+                "CFBundleIdentifier": "studio.machiwhale.m5stopwatch.typeless-key-sender",
+                "CFBundleInfoDictionaryVersion": "6.0",
+                "CFBundleName": "TypelessKeySender",
+                "CFBundlePackageType": "APPL",
+                "CFBundleShortVersionString": "1.0",
+                "CFBundleVersion": "1",
+            },
+            target,
+            sort_keys=True,
+        )
+    try:
+        subprocess.run(
+            [
+                str(signer),
+                "--force",
+                "--deep",
+                "--sign",
+                "-",
+                "--identifier",
+                "studio.machiwhale.m5stopwatch.typeless-key-sender",
+                str(app_bundle),
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit("Failed to sign the Typeless key helper app: %s" % exc)
+    marker.write_text(fingerprint + "\n", encoding="utf-8")
+    print("Installed Typeless key helper: %s" % helper)
+
+
+def request_typeless_accessibility(p: Dict[str, Path]) -> bool:
+    helper = p["typeless_helper"]
+    checked = subprocess.run(
+        [str(helper), "check"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if "accessibility_trusted=true" in checked.stdout:
+        print("Typeless key helper Accessibility permission is ready.")
+        return True
+    subprocess.run([str(helper), "request-accessibility"], check=False)
+    print(
+        "Typeless key helper needs Accessibility permission. "
+        "Approve TypelessKeySender in System Settings > Privacy & Security > Accessibility."
+    )
+    return False
+
+
+def _install_audio_helper_binary(p: Dict[str, Path]) -> None:
+    inputs = _audio_helper_prerequisites(p)
     helper = p["audio_helper"]
     helper.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(bundled, helper)
+    if "bundled" in inputs:
+        shutil.copy2(inputs["bundled"], helper)
+    else:
+        temporary = helper.with_name(helper.name + ".tmp-%d" % os.getpid())
+        try:
+            subprocess.run(
+                [
+                    str(inputs["compiler"]),
+                    "-O2",
+                    "-Wall",
+                    "-Wextra",
+                    str(inputs["source"]),
+                    "-framework",
+                    "CoreAudio",
+                    "-framework",
+                    "CoreFoundation",
+                    "-o",
+                    str(temporary),
+                ],
+                check=True,
+            )
+            os.replace(temporary, helper)
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit("Failed to build the M5 audio helper: %s" % exc)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
     helper.chmod(0o755)
+
+
+def install_audio_agent(p: Dict[str, Path]) -> None:
+    helper = p["audio_helper"]
+    _install_audio_helper_binary(p)
     launch_file = p["audio_launch_agent"]
     launch_file.parent.mkdir(parents=True, exist_ok=True)
     _backup(launch_file)
@@ -520,6 +761,8 @@ def main() -> None:
         install_peer_node(peer_paths(), enable_usb=args.peer_usb)
         return
     p = paths()
+    if args.typeless or args.all:
+        preflight_typeless_install(p)
     if args.add_peer_from_usage:
         configure_peer_from_usage(p)
     if args.hooks or args.all:
@@ -528,8 +771,10 @@ def main() -> None:
         install_launch_agent(p)
     if args.typeless or args.all:
         configure_typeless(p)
+        install_typeless_key_sender(p)
         install_audio_agent(p)
         subprocess.run(["/usr/bin/open", "-a", "Typeless"], check=False)
+        request_typeless_accessibility(p)
 
 
 if __name__ == "__main__":

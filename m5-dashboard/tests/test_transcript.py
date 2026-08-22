@@ -46,11 +46,15 @@ class TranscriptTests(unittest.TestCase):
             self._write(path, rows)
             tracker = LocalCodexTranscripts(root, stale_seconds=300)
 
-            self.assertEqual(tracker.snapshots(False), [])
+            private = tracker.snapshots(False)
+            self.assertEqual(private[0]["title"], "Codex 1")
+            self.assertEqual(private[0]["messages"], [])
+            self.assertFalse(private[0]["content_visible"])
             result = tracker.snapshots(True)
 
             self.assertEqual(result[0]["id"], "12345678")
             self.assertEqual(result[0]["title"], "帮我检查固件")
+            self.assertTrue(result[0]["content_visible"])
             self.assertEqual(
                 [(item["role"], item["text"]) for item in result[0]["messages"]],
                 [("user", "帮我检查固件"), ("assistant", "正在检查固件。")],

@@ -398,11 +398,22 @@ class CodexMonitor(threading.Thread):
         usage: Dict[str, Any] = {}
         threads: List[Dict[str, Any]] = []
         peer_usage_cache: Dict[str, Dict[str, Any]] = {}
+        usage_error = ""
         while not self._stop_event.is_set():
             now_mono = time.monotonic()
             if now_mono >= next_usage:
-                limits = client.request("account/rateLimits/read") or {}
-                raw_usage = client.request("account/usage/read") or {}
+                try:
+                    fresh_limits = client.request("account/rateLimits/read") or {}
+                    if fresh_limits:
+                        limits = fresh_limits
+                    usage_error = ""
+                except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
+                    usage_error = str(exc)[:160]
+                try:
+                    raw_usage = client.request("account/usage/read") or {}
+                except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
+                    raw_usage = {}
+                    usage_error = str(exc)[:160]
                 local_usage = collect_local_daily_usage(
                     str(self.config.get("session_root") or "~/.codex/sessions")
                 )
@@ -489,7 +500,7 @@ class CodexMonitor(threading.Thread):
                     "limits": formatted_limits,
                     "usage": usage,
                     "updated_at": int(time.time()),
-                    "error": "",
+                    "error": usage_error,
                 }
             )
             self._stop_event.wait(thread_refresh)

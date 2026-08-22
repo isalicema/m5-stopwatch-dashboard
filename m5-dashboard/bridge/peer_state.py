@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 
 _MAX_SESSIONS = 12
-_MAX_TRANSCRIPTS = 2
+_MAX_TRANSCRIPTS = 3
 _MAX_RESULTS = 6
 
 

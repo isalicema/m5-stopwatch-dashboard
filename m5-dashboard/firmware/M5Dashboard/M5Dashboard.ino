@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <esp32-hal-cpu.h>
+#include <esp_system.h>
 #include <time.h>
 
 #include "ui_font_noto_sans_sc_16.h"
@@ -24,11 +25,14 @@
 #endif
 
 #include "device_config.h"
+#include "app_shell_logic.h"
 #include "claude_icon.h"
 #include "codex_pet_frames.h"
+#include "feature_assets.h"
 #include "icon_animation.h"
 #include "icons.h"
 #include "interaction_logic.h"
+#include "provider_brand_icons.h"
 #include "provisioning.h"
 
 namespace {
@@ -44,15 +48,41 @@ Stream &dashboardBridgeSerial = Serial;
 M5Canvas canvas(&M5.Display);
 M5Canvas frameCanvas(&M5.Display);
 M5Canvas transitionCanvas(&M5.Display);
-M5Canvas iconCanvas(&M5.Display);
+M5Canvas stopwatchTimeCanvas(&M5.Display);
+M5Canvas clockSecondCanvas(&M5.Display);
+M5Canvas aiHotspotBurstCanvas(&M5.Display);
 
 #if M5DASH_HAS_NOTO_UI_FONT
 lgfx::VLWfont uiChineseFont;
 lgfx::PointerWrapper uiChineseFontData;
+lgfx::VLWfont stopwatchDigitFont;
+lgfx::PointerWrapper stopwatchDigitFontData;
+lgfx::VLWfont editorialMedium14Font;
+lgfx::PointerWrapper editorialMedium14FontData;
+lgfx::VLWfont editorialBold18Font;
+lgfx::PointerWrapper editorialBold18FontData;
+lgfx::VLWfont editorialBold24Font;
+lgfx::PointerWrapper editorialBold24FontData;
+lgfx::VLWfont editorialBold32DigitsFont;
+lgfx::PointerWrapper editorialBold32DigitsFontData;
+lgfx::VLWfont editorialBold80Font;
+lgfx::PointerWrapper editorialBold80FontData;
+lgfx::VLWfont editorialBold104Font;
+lgfx::PointerWrapper editorialBold104FontData;
 #endif
 bool uiChineseFontReady = false;
+bool stopwatchDigitFontReady = false;
+bool editorialMedium14FontReady = false;
+bool editorialBold18FontReady = false;
+bool editorialBold24FontReady = false;
+bool editorialBold32DigitsFontReady = false;
+bool editorialBold80FontReady = false;
+bool editorialBold104FontReady = false;
+bool stopwatchTimeCanvasReady = false;
+bool clockSecondCanvasReady = false;
+bool aiHotspotBurstCanvasReady = false;
 
-constexpr size_t kMaxTranscriptTasks = 2;
+constexpr size_t kMaxTranscriptTasks = 3;
 constexpr size_t kMaxTranscriptMessages = 6;
 constexpr size_t kVisibleTranscriptMessages = 3;
 
@@ -65,6 +95,7 @@ struct TranscriptTask {
   String id;
   String title;
   String status;
+  bool contentVisible = false;
   size_t messageCount = 0;
   TranscriptMessage messages[kMaxTranscriptMessages];
 };
@@ -96,17 +127,36 @@ struct WeatherData {
   String label;
 };
 
-struct PrinterData {
+struct AIHotspotData {
   bool connected = false;
-  int progress = 0;
-  int remainingMin = 0;
-  float nozzle = 0;
-  float bed = 0;
-  float chamber = 0;
-  int layer = 0;
-  int totalLayers = 0;
-  String state = "OFFLINE";
-  String file = "";
+  bool active = false;
+  int unreadCount = 0;
+  String id;
+  String title;
+  String source;
+  String url;
+  int64_t receivedAt = 0;
+};
+
+struct ObsidianDiceData {
+  bool connected = false;
+  int availableCount = 0;
+  String title;
+  String folder;
+  String excerpt;
+  String relativePath;
+  int64_t rolledAt = 0;
+};
+
+struct TickTickData {
+  bool connected = false;
+  String stopwatchState = "idle";
+  int stopwatchElapsed = 0;
+  String countdownState = "idle";
+  int countdownDuration = 1500;
+  int countdownRemaining = 1500;
+  String error;
+  uint32_t syncedAt = 0;
 };
 
 struct CodexData {
@@ -124,13 +174,24 @@ struct CodexData {
   String firstStatus = "";
 };
 
-PrinterData printer;
+struct AIUsageData {
+  bool connected = false;
+  bool complete = false;
+  bool approximate = false;
+  int64_t todayTotalTokens = 0;
+  int64_t todayAuthoritativeTokens = 0;
+};
+
+TickTickData ticktick;
 CodexData codex;
 CodexData claude;
+AIUsageData aiUsage;
 TranscriptCollection codexTranscripts;
 TranscriptCollection claudeTranscripts;
 DashboardResultCollection dashboardResults;
 WeatherData weather;
+AIHotspotData aiHotspot;
+ObsidianDiceData obsidianDice;
 DashboardSettings settings;
 ProvisioningPortal provisioning;
 WiFiUDP discoveryUdp;
@@ -141,7 +202,25 @@ bool configMode = false;
 bool discoveryUdpStarted = false;
 bool configHoldTriggered = false;
 int currentPage = 0;
-constexpr int pageCount = 4;
+constexpr int pageCount = 7;
+// The selected UI source uses #F8F5ED. On the StopWatch's high-brightness
+// RGB565 panel that value reads as neutral white, so use a slightly warmer
+// hardware-calibrated paper tone. The first #F7F1E2 calibration was still too
+// subtle in hand, so Owner selected one warmer step: #F5EAD6.
+constexpr uint8_t kEditorialPaperR = 245;
+constexpr uint8_t kEditorialPaperG = 234;
+constexpr uint8_t kEditorialPaperB = 214;
+// Temporary real-device regression boundary: the original provider renderer
+// was confirmed enterable before the editorial quota/reset UI batch. Keep the
+// new Bridge data contract, but use that proven renderer until the PANIC is
+// isolated inside the new provider presentation layer.
+constexpr bool kProviderRegressionSafeRenderer = false;
+DashboardAppMode appMode = DashboardAppMode::launcher;
+int launcherSelection = 0;
+LocalStopwatchModel localStopwatch;
+std::size_t localStopwatchLapOffset = 0;
+bool shellBButtonWasPressed = false;
+uint32_t lastLocalStopwatchDrawAt = 0;
 constexpr uint16_t kDiscoveryPort = 8766;
 constexpr uint16_t kDiscoveryLocalPort = 42101;
 String activeBridgeHost;
@@ -164,19 +243,25 @@ int lastBridgeHttpStatus = 0;
 int activeTokenSlot = -1;
 int activeUsbTokenSlot = -1;
 int pendingUsbTokenSlot = -1;
+uint8_t usbUnauthorizedCount = 0;
 String connectedSsid;
 String usbResponseLine;
 uint32_t lastUsbRequestAt = 0;
 uint32_t lastUsbStateAt = 0;
 uint32_t vibrationStopAt = 0;
 uint32_t lastBatteryReadAt = 0;
+uint32_t lastUsbConnectionReadAt = 0;
 int deviceBatteryLevel = -1;
 bool deviceCharging = false;
+bool deviceUsbConnected = false;
 volatile bool screenLocked = false;
+bool pendingAiHotspotWake = false;
 DashboardPowerButtonState powerButtonState;
 bool transitionCanvasReady = false;
 bool frameCanvasReady = false;
-bool iconCanvasReady = false;
+bool editorialFrameAccentActive = false;
+uint16_t editorialFrameAccent = 0;
+bool editorialFrameBurstActive = false;
 bool configChordActive = false;
 int brightnessPercent = 50;
 int notificationVolumePercent = 40;
@@ -195,15 +280,29 @@ uint32_t lastHighPerformanceAt = 0;
 bool cpuLowPower = false;
 volatile bool voiceCaptureActive = false;
 bool voiceSessionActive = false;
-bool voiceButtonTracking = false;
-bool voiceButtonConsumed = false;
-uint32_t voiceButtonPressedAt = 0;
 bool aButtonTracking = false;
 bool aButtonConsumed = false;
 bool aButtonLongTriggered = false;
 uint32_t aButtonPressedAt = 0;
+bool bButtonTracking = false;
+bool bButtonConsumed = false;
+bool bButtonLongTriggered = false;
+uint32_t bButtonPressedAt = 0;
+DashboardClickButtonState aClickState;
+DashboardClickButtonState bClickState;
+uint32_t lastTickTickDrawSecond = 0;
+int lastClockDrawSecond = -1;
+int lastClockDrawMinute = -1;
 bool provisioningTouchPending = false;
 RTC_DATA_ATTR bool openWifiPickerAfterRestart = false;
+constexpr uint32_t kRenderDiagnosticMagic = 0x4D354447;
+RTC_DATA_ATTR uint32_t renderDiagnosticMagic = kRenderDiagnosticMagic;
+RTC_DATA_ATTR uint16_t renderDiagnosticStage = 0;
+RTC_DATA_ATTR uint8_t renderDiagnosticPage = 7;
+uint16_t previousRenderDiagnosticStage = 0;
+uint8_t previousRenderDiagnosticPage = 7;
+uint8_t bootResetReason = 0;
+bool bootDiagnosticAcknowledged = false;
 volatile bool voiceCaptureFailed = false;
 bool usbAudioReady = false;
 uint32_t lastVoiceAnimationAt = 0;
@@ -238,6 +337,11 @@ float resultBallPreviousAccelZ = 0.0f;
 uint32_t lastResultBallPhysicsAt = 0;
 uint32_t lastResultBallFrameAt = 0;
 uint32_t lastResultBallShakeAt = 0;
+bool obsidianShakePreviousReady = false;
+float obsidianShakePreviousX = 0.0f;
+float obsidianShakePreviousY = 0.0f;
+float obsidianShakePreviousZ = 0.0f;
+uint32_t lastObsidianShakeAt = 0;
 int64_t dashboardServerTime = 0;
 uint32_t dashboardServerTimeAt = 0;
 volatile int voiceLevelPercent = 0;
@@ -304,9 +408,10 @@ struct ToneStep {
   uint16_t gapMs;
 };
 
-constexpr ToneStep kPrinterDoneTones[] = {{880, 80, 35}, {1175, 140, 0}};
-constexpr ToneStep kPrinterErrorTones[] = {{660, 100, 45}, {520, 100, 45}, {390, 180, 0}};
+constexpr ToneStep kFocusDoneTones[] = {{880, 80, 35}, {1175, 140, 0}};
 constexpr ToneStep kCodexWaitingTones[] = {{1047, 120, 0}};
+constexpr ToneStep kAiScreamTones[] = {
+    {988, 70, 18}, {1319, 70, 18}, {1760, 180, 30}, {2093, 220, 0}};
 constexpr ToneStep kVolumePreviewTone[] = {{1047, 70, 0}};
 constexpr uint16_t kSpeakerReleaseTailMs = 24;
 constexpr uint32_t kAudioPowerGuardIntervalMs = 500;
@@ -327,8 +432,9 @@ constexpr uint8_t kM5Pm1NeoConfigRegister = 0x50;
 constexpr uint8_t kM5Pm1LedDefaultMask = 0x10;
 constexpr uint8_t kM5Pm1LedOpenDrainMask = 0x20;
 constexpr uint32_t kM5Pm1I2cFrequency = 100000;
-constexpr uint32_t kPowerButtonDoubleClickMs = 500;
 constexpr uint32_t kPowerButtonShortPressMaxMs = 1500;
+constexpr uint32_t kPowerButtonDoubleClickMs = 500;
+constexpr uint32_t kPowerButtonLongPressMs = 1600;
 constexpr int kDisplayChipSelectPin = 39;
 constexpr uint8_t kTouchResetIoExpanderPin = 3;  // M5IOE1 gpio4.
 constexpr int kSwipeThreshold = 55;
@@ -341,11 +447,29 @@ constexpr uint32_t kButtonOverlayMs = 1600;
 constexpr uint32_t kConnectionOverlayMs = 3000;
 constexpr uint32_t kWifiPickerOverlayMs = 15000;
 constexpr uint32_t kAButtonLongPressMs = 800;
+constexpr uint32_t kBButtonLongPressMs = 800;
 constexpr uint32_t kCpuIdleDelayMs = 15000;
 constexpr uint32_t kVoiceStoppedOverlayMs = 900;
 constexpr uint32_t kTranscriptRefreshMs = 1000;
 constexpr int kUiDesignSize = 450;
 constexpr int kUiFrameSize = 466;
+constexpr int kStopwatchTimeX = 45;
+constexpr int kStopwatchTimeY = 166;
+constexpr int kStopwatchTimeWidth = 360;
+constexpr int kStopwatchTimeHeight = 78;
+constexpr int kStopwatchTimeBaselineY = 226;
+constexpr int kClockSecondPatchX = 308;
+constexpr int kClockSecondPatchY = 190;
+constexpr int kClockSecondPatchWidth = 70;
+constexpr int kClockSecondPatchHeight = 70;
+constexpr int kClockSecondTextX = 342;
+constexpr int kClockSecondTextY = 225;
+constexpr int kClockSecondUnderlineX = 316;
+constexpr int kClockSecondUnderlineY = 253;
+constexpr int kClockSecondUnderlineWidth = 52;
+constexpr int kClockSecondUnderlineHeight = 5;
+constexpr int kStopwatchFooterY = 408;
+constexpr uint32_t kStopwatchFrameIntervalMs = 20;
 constexpr int kDashboardRingCenterX = 225;
 constexpr int kDashboardRingCenterY = 225;
 constexpr int kDashboardRingOuterRadius = 216;
@@ -355,9 +479,9 @@ constexpr int kPageIndicatorActiveRadius = 3;
 static_assert(kPageIndicatorY + kPageIndicatorActiveRadius <
                   kDashboardRingCenterY + kDashboardRingInnerRadius,
               "page indicator must not overlap the dashboard ring");
-constexpr int kCenterIconX = 177;
-constexpr int kCenterIconY = 170;
-constexpr int kCenterIconSize = 96;
+constexpr int kCenterIconX = kProviderIconX;
+constexpr int kCenterIconY = kProviderIconY;
+constexpr int kCenterIconSize = kProviderIconSize;
 constexpr uint32_t kIconAnimationRefreshMs = 100;
 constexpr uint32_t kCodexDoneAnimationMs = kDashboardCompletionDurationMs;
 constexpr uint32_t kCompletionAnimationRefreshMs = 40;
@@ -365,7 +489,8 @@ constexpr uint32_t kCompletionStateGapMs = 15000;
 constexpr uint32_t kResultBallPhysicsIntervalMs = 20;
 constexpr uint32_t kResultBallFrameIntervalMs = 33;
 constexpr uint32_t kResultBallShakeCooldownMs = 180;
-constexpr uint8_t kVoiceButtonPin = 1;  // StopWatch KEYB (blue), active low.
+constexpr uint8_t kBButtonPin = 1;  // StopWatch KEYB (blue), active low.
+constexpr uint32_t kFocusDoubleClickMs = 360;
 constexpr uint32_t kCpuHighFrequencyMhz = 240;
 constexpr uint32_t kCpuLowFrequencyMhz = 80;
 constexpr uint32_t kWifiRetryIntervalMs = 750;
@@ -377,25 +502,57 @@ constexpr uint32_t kUsbStateStaleMs = 6000;
 constexpr size_t kUsbRxQueueBytes = 4096;
 constexpr size_t kUsbMaxLineBytes = 32768 + 64;
 constexpr char kUsbRequestPrefix[] = "M5DASH_USB_V1|GET|";
+constexpr char kUsbActionPrefix[] = "M5DASH_USB_V1|POST|";
+constexpr char kUsbPairRequestPrefix[] = "M5DASH_USB_V1|PAIR|";
+constexpr char kUsbPairResponsePrefix[] = "M5DASH_USB_V1|PAIRED|";
 constexpr char kUsbResponsePrefix[] = "M5DASH_USB_V1|OK|";
 constexpr char kUsbErrorPrefix[] = "M5DASH_USB_V1|ERR|";
+constexpr char kUsbDiagnosticPrefix[] = "M5DASH_USB_V1|DIAG|";
+
+void markRenderDiagnostic(uint16_t stage, int page = -1) {
+  renderDiagnosticMagic = kRenderDiagnosticMagic;
+  renderDiagnosticStage = stage;
+  renderDiagnosticPage = static_cast<uint8_t>(page >= 0 && page < pageCount ? page : 7);
+}
+
+void markProviderLoopDiagnostic(uint16_t stage) {
+  if (appMode == DashboardAppMode::dashboard &&
+      (currentPage == 2 || currentPage == 3)) {
+    markRenderDiagnostic(stage, currentPage);
+  }
+}
 
 void drawCurrentPage();
+void enterAppLauncher();
+bool readBButtonPressed();
 size_t visibleDashboardResultCount();
 void drawProvisioningPage(const String &apName, bool ready);
 void showConnectionStatus();
 void openWifiPicker();
 void openTranscript();
+void performObsidianAction(const String &action);
+void performTypelessAction(const String &action);
 bool overlayVisible();
 bool completionAnimationActive(uint32_t now);
 bool beginVoiceCapture();
 void endVoiceCapture();
+void toggleVoiceSession();
+void drawEditorialBackdrop(uint16_t accent);
+void drawEditorialHeader(const String &primary, const String &secondary,
+                         uint16_t ink);
+void drawEditorialHero(const String &value, int x, int y, int maxWidth,
+                       uint16_t ink, float maxScale);
+void drawAIHotspotBurst(M5Canvas &target, int frameOffset);
 #if defined(M5DASH_USB_AUDIO)
 void stopVoiceCaptureHardware();
 #endif
 
 uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return canvas.color565(r, g, b);
+}
+
+uint16_t editorialPaperColor() {
+  return rgb(kEditorialPaperR, kEditorialPaperG, kEditorialPaperB);
 }
 
 bool completionAnimationActive(uint32_t now) {
@@ -417,15 +574,25 @@ int displayFrameOffsetY() {
 }
 
 uint16_t currentRenderedBackground() {
+  if (appMode == DashboardAppMode::stopwatch) return rgb(0, 0, 0);
+  if (appMode == DashboardAppMode::launcher) return editorialPaperColor();
   uint32_t now = millis();
   if (completionAnimationActive(now)) {
     DashboardCompletionAnimationFrame frame = dashboardCompletionAnimationFrame(
         static_cast<uint32_t>(now - completionAnimationStartedAt));
-    if (frame.successRadius >= kDashboardCompletionFullRadius) {
+    if (frame.visible) {
       bool claudeProvider = completionProvider == 'A';
       uint8_t backgroundR = claudeProvider ? 15 : 7;
       uint8_t backgroundG = claudeProvider ? 11 : 8;
       uint8_t backgroundB = claudeProvider ? 9 : 17;
+      // The completion compositor replaces the 450 px design canvas with a
+      // dark provider animation. Keep the surrounding 8 px of the 466 px
+      // physical frame on that same background from the very first visible
+      // frame; otherwise the round panel exposes four paper-coloured points at
+      // its top, right, bottom, and left edges.
+      if (frame.successRadius < kDashboardCompletionFullRadius) {
+        return rgb(backgroundR, backgroundG, backgroundB);
+      }
       uint8_t accentR = claudeProvider ? 217 : 95;
       uint8_t accentG = claudeProvider ? 119 : 103;
       uint8_t accentB = claudeProvider ? 87 : 255;
@@ -439,6 +606,10 @@ uint16_t currentRenderedBackground() {
                                (static_cast<int>(accentB) - backgroundB) * intensity / 100));
     }
   }
+  if (kProviderRegressionSafeRenderer && haveData &&
+      overlayMode == OverlayMode::none && (currentPage == 2 || currentPage == 3)) {
+    return currentPage == 2 ? rgb(7, 8, 17) : rgb(15, 11, 9);
+  }
   if (!haveData ||
       ((overlayMode == OverlayMode::voice || overlayMode == OverlayMode::wifiPicker ||
         overlayMode == OverlayMode::transcript || overlayMode == OverlayMode::orbit ||
@@ -448,19 +619,29 @@ uint16_t currentRenderedBackground() {
         overlayMode == OverlayMode::results) {
       return rgb(8, 9, 12);
     }
-    if (overlayMode == OverlayMode::voice) return rgb(9, 9, 10);
+    // Typeless LIVE is still the light editorial page, not a dark full-screen
+    // overlay. Its 466 px frame must use the same paper colour as the 450 px
+    // design canvas or the outer 8 px appears as black clipping.
+    if (overlayMode == OverlayMode::voice) return editorialPaperColor();
     return rgb(7, 8, 14);
   }
-  if (currentPage == 0) return rgb(8, 9, 12);
-  if (currentPage == 1) return rgb(5, 14, 10);
-  if (currentPage == 2) return rgb(7, 8, 17);
-  return rgb(15, 11, 9);
+  return editorialPaperColor();
 }
 
 void composeRenderedFrame(uint16_t background) {
   if (!frameCanvasReady) return;
   frameCanvas.fillSprite(background);
   int offset = designFrameOffset();
+  if (editorialFrameBurstActive) {
+    // The design canvas is 450 px inside the 466 px physical frame. Repeat the
+    // same raster in the outer frame before compositing the design canvas so
+    // the burst reaches the bezel instead of ending in an 8 px paper seam.
+    drawAIHotspotBurst(frameCanvas, offset);
+  }
+  if (editorialFrameAccentActive) {
+    frameCanvas.fillSmoothCircle(364 + offset, 130 + offset, 164,
+                                 editorialFrameAccent);
+  }
   canvas.pushSprite(&frameCanvas, offset, offset);
 }
 
@@ -506,6 +687,46 @@ bool initializeUiChineseFont() {
 #endif
 }
 
+bool initializeStopwatchDigitFont() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  static_assert(kStopwatchFontGlyphCount == 12,
+                "The Stopwatch font must contain 0-9, colon, and period");
+  if (reinterpret_cast<const volatile char *>(kStopwatchFontIdentity)[0] != 'M') {
+    return false;
+  }
+  stopwatchDigitFontData.set(kStopwatchFontVlw, kStopwatchFontVlwSize);
+  stopwatchDigitFontReady = stopwatchDigitFont.loadFont(&stopwatchDigitFontData);
+  return stopwatchDigitFontReady;
+#else
+  return false;
+#endif
+}
+
+bool initializeEditorialFonts() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  editorialMedium14FontData.set(kEditorialMedium14Vlw, kEditorialMedium14VlwSize);
+  editorialBold18FontData.set(kEditorialBold18Vlw, kEditorialBold18VlwSize);
+  editorialBold24FontData.set(kEditorialBold24Vlw, kEditorialBold24VlwSize);
+  editorialBold32DigitsFontData.set(kEditorialBold32DigitsVlw,
+                                    kEditorialBold32DigitsVlwSize);
+  editorialBold80FontData.set(kEditorialBold80Vlw, kEditorialBold80VlwSize);
+  editorialBold104FontData.set(kEditorialBold104Vlw, kEditorialBold104VlwSize);
+  editorialMedium14FontReady = editorialMedium14Font.loadFont(&editorialMedium14FontData);
+  editorialBold18FontReady = editorialBold18Font.loadFont(&editorialBold18FontData);
+  editorialBold24FontReady = editorialBold24Font.loadFont(&editorialBold24FontData);
+  editorialBold32DigitsFontReady =
+      editorialBold32DigitsFont.loadFont(&editorialBold32DigitsFontData);
+  editorialBold80FontReady = editorialBold80Font.loadFont(&editorialBold80FontData);
+  editorialBold104FontReady = editorialBold104Font.loadFont(&editorialBold104FontData);
+  return editorialMedium14FontReady && editorialBold18FontReady &&
+         editorialBold24FontReady && editorialBold32DigitsFontReady &&
+         editorialBold80FontReady &&
+         editorialBold104FontReady;
+#else
+  return false;
+#endif
+}
+
 void useChinese16() {
 #if M5DASH_HAS_NOTO_UI_FONT
   if (uiChineseFontReady) {
@@ -526,6 +747,94 @@ void useChinese24() {
 
 void useNumberFont() {
   canvas.setFont(&fonts::Font4);
+  canvas.setTextSize(1);
+}
+
+void useEditorialMicro14() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  canvas.setFont(editorialMedium14FontReady ? &editorialMedium14Font : &uiChineseFont);
+#else
+  canvas.setFont(&fonts::efontCN_16);
+#endif
+  canvas.setTextSize(1);
+}
+
+void useEditorialBold18() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  canvas.setFont(editorialBold18FontReady ? &editorialBold18Font : &uiChineseFont);
+#else
+  canvas.setFont(&fonts::efontCN_16);
+#endif
+  canvas.setTextSize(1);
+}
+
+void useEditorialBold24() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  canvas.setFont(editorialBold24FontReady ? &editorialBold24Font : &uiChineseFont);
+#else
+  canvas.setFont(&fonts::efontCN_24);
+#endif
+  canvas.setTextSize(1);
+}
+
+void useEditorialBold24(M5Canvas &target) {
+#if M5DASH_HAS_NOTO_UI_FONT
+  target.setFont(editorialBold24FontReady ? &editorialBold24Font : &uiChineseFont);
+#else
+  target.setFont(&fonts::efontCN_24);
+#endif
+  target.setTextSize(1);
+}
+
+void useClockSecondFont(M5Canvas &target) {
+#if M5DASH_HAS_NOTO_UI_FONT
+  target.setFont(editorialBold32DigitsFontReady ? &editorialBold32DigitsFont
+                                                : &editorialBold24Font);
+#else
+  target.setFont(&fonts::efontCN_24);
+#endif
+  target.setTextSize(1);
+}
+
+void drawClockSecondValue(M5Canvas &target, int originX, int originY,
+                          int second, uint16_t mint, uint16_t ink) {
+  target.fillRect(kClockSecondPatchX - originX, kClockSecondPatchY - originY,
+                  kClockSecondPatchWidth, kClockSecondPatchHeight, mint);
+  char buffer[3];
+  snprintf(buffer, sizeof(buffer), "%02d", second);
+  target.setTextColor(ink);
+  target.setTextDatum(middle_center);
+  useClockSecondFont(target);
+  target.drawString(buffer, kClockSecondTextX - originX,
+                    kClockSecondTextY - originY);
+  target.fillRect(kClockSecondUnderlineX - originX,
+                  kClockSecondUnderlineY - originY,
+                  kClockSecondUnderlineWidth, kClockSecondUnderlineHeight, ink);
+}
+
+void useEditorialHero104() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  if (editorialBold104FontReady) {
+    canvas.setFont(&editorialBold104Font);
+  } else {
+    canvas.setFont(&fonts::Font8);
+  }
+#else
+  canvas.setFont(&fonts::Font8);
+#endif
+  canvas.setTextSize(1);
+}
+
+void useEditorialHero80() {
+#if M5DASH_HAS_NOTO_UI_FONT
+  if (editorialBold80FontReady) {
+    canvas.setFont(&editorialBold80Font);
+  } else {
+    canvas.setFont(&fonts::Font8);
+  }
+#else
+  canvas.setFont(&fonts::Font8);
+#endif
   canvas.setTextSize(1);
 }
 
@@ -741,13 +1050,13 @@ void configurePowerButtonPolicy() {
   config1 &= ~0x80;                    // Keep the official USB download action enabled.
   config1 = (config1 & ~0x60) | 0x40;  // Use the PMIC's 500 ms double-click window.
   config1 = (config1 & ~0x18) | 0x08;  // USB + 2-second hold enters download mode.
-  config1 |= 0x01;                     // Single click belongs to dashboard standby.
+  config1 |= 0x01;                     // Single click belongs to the app shell.
   M5.In_I2C.writeRegister8(kM5Pm1Address, kM5Pm1ButtonConfig1Register, config1,
                            kM5Pm1I2cFrequency);
 
   uint8_t config2 = M5.In_I2C.readRegister8(
       kM5Pm1Address, kM5Pm1ButtonConfig2Register, kM5Pm1I2cFrequency);
-  config2 &= ~0x01;  // Restore the PMIC's official double-click shutdown.
+  config2 |= 0x01;  // Disable PMIC double-click shutdown; software uses long press.
   M5.In_I2C.writeRegister8(kM5Pm1Address, kM5Pm1ButtonConfig2Register, config2,
                            kM5Pm1I2cFrequency);
 }
@@ -771,9 +1080,8 @@ void setAmoledHardwareSleep(bool sleeping) {
 }
 
 void stopVoiceForStandby() {
+  if (voiceSessionActive) performTypelessAction("stop");
   voiceSessionActive = false;
-  voiceButtonTracking = false;
-  voiceButtonConsumed = false;
 #if defined(M5DASH_USB_AUDIO)
   stopVoiceCaptureHardware();
 #else
@@ -786,32 +1094,23 @@ void setScreenLocked(bool locked) {
   if (screenLocked == locked) return;
   screenLocked = locked;
   if (locked) {
-    stopVibration();
-    stopTonePattern();
+    // Display standby is deliberately not network standby. Typeless releases
+    // the microphone, while Wi-Fi, Bridge polling, the speaker and the haptic
+    // path remain available for an AI hotspot alert.
     stopVoiceForStandby();
     aButtonTracking = false;
     aButtonConsumed = false;
     aButtonLongTriggered = false;
     aButtonPressedAt = 0;
+    bButtonTracking = false;
+    bButtonConsumed = false;
+    bButtonLongTriggered = false;
+    bButtonPressedAt = 0;
     overlayMode = OverlayMode::none;
     completionAnimationRunning = false;
     completionBaselineReady = false;
     activeGesture = DashboardGesture::none;
     touchPending = false;
-    if (discoveryUdpStarted) discoveryUdp.stop();
-    discoveryUdpStarted = false;
-    WiFi.disconnect(true, false);
-    WiFi.mode(WIFI_OFF);
-    wifiAttemptInProgress = false;
-    wifiManualProfile = -1;
-    wifiManualSwitchPending = false;
-    wifiReconnectPaused = false;
-    wifiPickerMessage = "";
-    wifiSearchStartedAt = 0;
-    connectedSsid = "";
-    bridgeOnline = false;
-    usbBridgeOnline = false;
-    lastUsbRequestAt = 0;
     disableBottomLed();
     M5.Display.setBrightness(0);
     M5.Display.waitDisplay();
@@ -826,13 +1125,12 @@ void setScreenLocked(bool locked) {
   delay(12);
   setAmoledHardwareSleep(false);
   applyDisplayBrightness();
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(false);
-  lastFetchAt = 0;
-  lastWifiAttemptAt = 0;
-  wifiAttemptStartedAt = 0;
-  lastUsbRequestAt = 0;
-  lastUsbStateAt = 0;
+  if (pendingAiHotspotWake) {
+    pendingAiHotspotWake = false;
+    appMode = DashboardAppMode::dashboard;
+    currentPage = 5;
+    overlayMode = OverlayMode::none;
+  }
   if (configMode) {
     ESP.restart();
   } else {
@@ -843,10 +1141,15 @@ void setScreenLocked(bool locked) {
 void updatePowerButton() {
   bool pressed = readPowerButtonPressed();
   DashboardPowerAction action = updateDashboardPowerButton(
-      powerButtonState, pressed, millis(), kPowerButtonDoubleClickMs,
-      kPowerButtonShortPressMaxMs);
-  if (action == DashboardPowerAction::toggleStandby) {
+      powerButtonState, pressed, millis(), kPowerButtonShortPressMaxMs,
+      kPowerButtonDoubleClickMs, kPowerButtonLongPressMs, deviceUsbConnected);
+  if (action == DashboardPowerAction::toggleScreen) {
     setScreenLocked(!screenLocked);
+  } else if (action == DashboardPowerAction::openLauncher) {
+    // A deliberate double-click wins over the deferred AI-hotspot wake route.
+    pendingAiHotspotWake = false;
+    if (screenLocked) setScreenLocked(false);
+    enterAppLauncher();
   } else if (action == DashboardPowerAction::powerOff) {
     if (!screenLocked) setScreenLocked(true);
     disableBottomLed();
@@ -855,6 +1158,14 @@ void updatePowerButton() {
 }
 
 void updateDevicePower(bool force = false) {
+  constexpr uint32_t usbRefreshMs = 500;
+  if (force || lastUsbConnectionReadAt == 0 ||
+      millis() - lastUsbConnectionReadAt >= usbRefreshMs) {
+    lastUsbConnectionReadAt = millis();
+    int vbusMillivolts = M5.Power.getVBUSVoltage();
+    deviceUsbConnected = vbusMillivolts >= 4000 || deviceCharging;
+  }
+
   constexpr uint32_t refreshMs = 15000;
   if (!force && lastBatteryReadAt != 0 && millis() - lastBatteryReadAt < refreshMs) return;
   lastBatteryReadAt = millis();
@@ -862,14 +1173,28 @@ void updateDevicePower(bool force = false) {
   deviceBatteryLevel = level >= 0 ? max(0, min(100, level)) : -1;
   deviceCharging =
       M5.Power.isCharging() == m5::Power_Class::is_charging_t::is_charging;
+  // Charging can become false at 100%, while VBUS still needs to reserve the
+  // PMIC's USB + 2 second Download Mode action.
+  int vbusMillivolts = M5.Power.getVBUSVoltage();
+  deviceUsbConnected = vbusMillivolts >= 4000 || deviceCharging;
+}
+
+bool typelessUsbAvailable() {
+#if defined(M5DASH_USB_AUDIO)
+  return dashboardTypelessUsbAvailable(
+      usbAudioReady, deviceUsbConnected,
+      usbLinkUsable.load(std::memory_order_acquire), usbBridgeOnline);
+#else
+  return false;
+#endif
 }
 
 void drawBatteryStatusAt(uint16_t background, uint16_t normalColor,
-                         int iconX, int iconY) {
+                         int iconX, int iconY, bool useChargingAccent = true) {
   constexpr int iconWidth = 24;
   constexpr int iconHeight = 13;
   uint16_t color = normalColor;
-  if (deviceCharging) {
+  if (deviceCharging && useChargingAccent) {
     color = rgb(58, 222, 126);
   } else if (deviceBatteryLevel >= 0 && deviceBatteryLevel <= 15) {
     color = rgb(255, 91, 91);
@@ -916,6 +1241,21 @@ String formatDurationCN(int minutes) {
   return hours > 0 ? String(days) + "天" + String(hours) + "时" : String(days) + "天";
 }
 
+String formatDurationCompact(int minutes) {
+  if (minutes < 0) return "--";
+  if (minutes < 60) return String(minutes) + "m";
+  if (minutes < 1440) {
+    int hours = minutes / 60;
+    int rest = minutes % 60;
+    return rest > 0 ? String(hours) + "h" + String(rest) + "m"
+                    : String(hours) + "h";
+  }
+  int days = minutes / 1440;
+  int hours = (minutes % 1440) / 60;
+  return hours > 0 ? String(days) + "d" + String(hours) + "h"
+                   : String(days) + "d";
+}
+
 String formatCount(int64_t value) {
   char buffer[24];
   if (value >= 100000000) {
@@ -949,15 +1289,51 @@ String formatLifetimeUsage(int64_t value) {
   return formatThousands(value);
 }
 
-String printerStatusCN() {
-  if (!printer.connected) return "打印机离线";
-  if (printer.state == "PRINTING" || printer.state == "RUNNING") return "正在打印";
-  if (printer.state == "PREPARING" || printer.state == "PREPARE") return "正在准备";
-  if (printer.state == "PAUSED" || printer.state == "PAUSE") return "打印暂停";
-  if (printer.state == "ERROR" || printer.state == "FAILED") return "打印异常";
-  if (printer.state == "FINISHED" || printer.state == "FINISH") return "打印完成";
-  if (printer.state == "IDLE") return "当前空闲";
-  return printer.state;
+bool timerRunning(const String &state) {
+  return state == "running" || state == "RUNNING";
+}
+
+bool timerPaused(const String &state) {
+  return state == "paused" || state == "PAUSED";
+}
+
+int currentStopwatchElapsed() {
+  int elapsed = ticktick.stopwatchElapsed;
+  if (timerRunning(ticktick.stopwatchState) && ticktick.syncedAt != 0) {
+    elapsed += static_cast<uint32_t>(millis() - ticktick.syncedAt) / 1000;
+  }
+  return max(0, elapsed);
+}
+
+int currentCountdownRemaining() {
+  int remaining = ticktick.countdownRemaining;
+  if (timerRunning(ticktick.countdownState) && ticktick.syncedAt != 0) {
+    remaining -= static_cast<uint32_t>(millis() - ticktick.syncedAt) / 1000;
+  }
+  return max(0, remaining);
+}
+
+String formatTimerSeconds(int seconds) {
+  seconds = max(0, seconds);
+  int hours = seconds / 3600;
+  int minutes = (seconds % 3600) / 60;
+  int remainder = seconds % 60;
+  char buffer[16];
+  if (hours > 0) {
+    snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, remainder);
+  } else {
+    snprintf(buffer, sizeof(buffer), "%02d:%02d", minutes, remainder);
+  }
+  return String(buffer);
+}
+
+String tickTickStatusCN() {
+  if (!ticktick.connected) return "TickTick 未连接";
+  if (timerRunning(ticktick.stopwatchState)) return "正计时进行中";
+  if (timerPaused(ticktick.stopwatchState)) return "正计时已暂停";
+  if (timerRunning(ticktick.countdownState)) return "25 分钟专注中";
+  if (timerPaused(ticktick.countdownState)) return "倒计时已暂停";
+  return "选择一种专注方式";
 }
 
 String codexStatusCN() {
@@ -976,16 +1352,15 @@ String claudeStatusCN() {
   return "当前空闲";
 }
 
-uint16_t printerColor() {
-  if (!printer.connected) return rgb(95, 103, 100);
-  if (printer.state == "PRINTING" || printer.state == "RUNNING" ||
-      printer.state == "PREPARING" || printer.state == "PREPARE") {
-    return rgb(0, 174, 66);
+uint16_t tickTickColor() {
+  if (!ticktick.connected) return rgb(105, 92, 104);
+  if (timerPaused(ticktick.stopwatchState) || timerPaused(ticktick.countdownState)) {
+    return rgb(255, 196, 0);
   }
-  if (printer.state == "PAUSED" || printer.state == "PAUSE") return rgb(255, 184, 77);
-  if (printer.state == "ERROR" || printer.state == "FAILED") return rgb(255, 82, 82);
-  if (printer.state == "FINISHED" || printer.state == "FINISH") return rgb(0, 174, 66);
-  return rgb(142, 148, 160);
+  if (timerRunning(ticktick.stopwatchState) || timerRunning(ticktick.countdownState)) {
+    return rgb(255, 59, 48);
+  }
+  return rgb(155, 148, 138);
 }
 
 uint16_t codexStatusColor() {
@@ -1030,136 +1405,27 @@ void maskRoundedImageCorners(int x, int y, int width, int height, int radius, ui
   }
 }
 
-void drawBambuLogo(uint16_t background) {
-  canvas.drawPng(
-    bambu_logo_png, bambu_logo_png_len,
-    177, 170, 96, 96,
-    0, 0, 1.0f, 1.0f, datum_t::top_left
-  );
-  maskRoundedImageCorners(177, 170, 96, 96, 22, background);
-}
-
-DashboardCodexIconMode currentCodexIconMode(uint32_t now) {
-  return selectDashboardCodexIconMode(
-      codex.connected, codex.active, codex.waiting, codex.errors,
-      dashboardDeadlinePending(now, codexDoneAnimationUntilAt));
-}
-
-size_t codexIconFrameCount(DashboardCodexIconMode mode) {
-  switch (mode) {
-    case DashboardCodexIconMode::working:
-      return sizeof(codex_pet_work_frames) / sizeof(codex_pet_work_frames[0]);
-    case DashboardCodexIconMode::waiting:
-      return sizeof(codex_pet_waiting_frames) / sizeof(codex_pet_waiting_frames[0]);
-    case DashboardCodexIconMode::done:
-      return sizeof(codex_pet_done_frames) / sizeof(codex_pet_done_frames[0]);
-    case DashboardCodexIconMode::failed:
-      return sizeof(codex_pet_failed_frames) / sizeof(codex_pet_failed_frames[0]);
-    case DashboardCodexIconMode::idle:
-      return 1;
-  }
-  return 1;
-}
-
-uint32_t codexIconFrameInterval(DashboardCodexIconMode mode) {
-  switch (mode) {
-    case DashboardCodexIconMode::working:
-      return 120;
-    case DashboardCodexIconMode::waiting:
-    case DashboardCodexIconMode::done:
-      return 150;
-    case DashboardCodexIconMode::failed:
-      return 140;
-    case DashboardCodexIconMode::idle:
-      return 1;
-  }
-  return 1;
-}
-
-const DashboardPngFrame &codexIconFrame(DashboardCodexIconMode mode, size_t index) {
-  switch (mode) {
-    case DashboardCodexIconMode::working:
-      return codex_pet_work_frames[index];
-    case DashboardCodexIconMode::waiting:
-      return codex_pet_waiting_frames[index];
-    case DashboardCodexIconMode::done:
-      return codex_pet_done_frames[index];
-    case DashboardCodexIconMode::failed:
-      return codex_pet_failed_frames[index];
-    case DashboardCodexIconMode::idle:
-      return codex_pet_idle_frames[0];
-  }
-  return codex_pet_idle_frames[0];
-}
-
-size_t currentCodexIconFrame(DashboardCodexIconMode mode, uint32_t now) {
-  return dashboardAnimationFrame(now, codexIconFrameInterval(mode),
-                                 codexIconFrameCount(mode));
-}
-
-uint8_t currentClaudeScalePercent(uint32_t now) {
-  if (!claude.connected || claude.active <= 0) return 100;
-  return dashboardClaudeScalePercent(
-      dashboardAnimationFrame(now, 110, 8));
-}
-
-void copyIconCanvasToPage(bool pushToDisplay) {
-  iconCanvas.pushSprite(&canvas, kCenterIconX, kCenterIconY);
-  if (!pushToDisplay) return;
-
-  int designOffset = designFrameOffset();
-  int frameX = kCenterIconX + designOffset;
-  int frameY = kCenterIconY + designOffset;
-  if (frameCanvasReady) iconCanvas.pushSprite(&frameCanvas, frameX, frameY);
-  iconCanvas.pushSprite(frameX + displayFrameOffsetX(),
-                        frameY + displayFrameOffsetY());
-}
-
-void composeCodexIcon(uint16_t background, uint32_t now) {
-  DashboardCodexIconMode mode = currentCodexIconMode(now);
-  size_t frameIndex = currentCodexIconFrame(mode, now);
-  const DashboardPngFrame &frame = codexIconFrame(mode, frameIndex);
-  iconCanvas.fillSprite(background);
-  iconCanvas.drawPng(frame.data, frame.length, 0, 0, kCenterIconSize, kCenterIconSize,
-                     0, 0, 1.0f, 1.0f, datum_t::top_left);
-}
-
-void composeClaudeIcon(uint16_t background, uint32_t now) {
-  iconCanvas.fillSprite(background);
-  iconCanvas.fillRoundRect(0, 0, kCenterIconSize, kCenterIconSize, 22,
-                           rgb(217, 119, 87));
-  float scale = static_cast<float>(currentClaudeScalePercent(now)) / 100.0f;
-  iconCanvas.drawPng(claude_mark_png, claude_mark_png_len,
-                     0, 0, kCenterIconSize, kCenterIconSize,
-                     0, 0, scale, scale, datum_t::middle_center);
+void drawProviderBrandIcon(const uint16_t *pixels) {
+  // The generated arrays store native RGB565 numeric values. M5GFX treats a
+  // uint16_t source as byte-swapped when swapBytes is false, producing the
+  // neon/noisy corruption confirmed on the physical device. Scope the swap
+  // to this one blit and restore the canvas state for every later renderer.
+  bool previousSwap = canvas.getSwapBytes();
+  canvas.setSwapBytes(true);
+  canvas.pushImage(kCenterIconX, kCenterIconY,
+                   kCenterIconSize, kCenterIconSize,
+                   pixels);
+  canvas.setSwapBytes(previousSwap);
 }
 
 void drawCodexIcon(uint16_t background) {
-  if (iconCanvasReady) {
-    composeCodexIcon(background, millis());
-    copyIconCanvasToPage(false);
-    return;
-  }
-  canvas.drawPng(
-    codex_icon_png, codex_icon_png_len,
-    177, 170, 96, 96,
-    0, 0, 1.0f, 1.0f, datum_t::top_left
-  );
-  maskRoundedImageCorners(177, 170, 96, 96, 22, background);
+  (void)background;
+  drawProviderBrandIcon(codex_brand_icon_rgb565);
 }
 
 void drawClaudeIcon(uint16_t background) {
-  if (iconCanvasReady) {
-    composeClaudeIcon(background, millis());
-    copyIconCanvasToPage(false);
-    return;
-  }
-  canvas.drawPng(
-    claude_icon_png, claude_icon_png_len,
-    177, 170, 96, 96,
-    0, 0, 1.0f, 1.0f, datum_t::top_left
-  );
-  maskRoundedImageCorners(177, 170, 96, 96, 22, background);
+  (void)background;
+  drawProviderBrandIcon(claude_brand_icon_rgb565);
 }
 
 void drawMetric(const String &label, const String &value, int x, int labelY, int valueY,
@@ -1183,14 +1449,27 @@ void drawMetric(const String &label, const String &value, int x, int labelY, int
                        lineColor != 0 ? lineColor : rgb(38, 55, 47));
 }
 
+void fillAntialiasedCapsule(int x, int y, int width, int height,
+                            uint16_t color) {
+  canvas.fillSmoothRoundRect(x, y, width, height, height / 2, color);
+}
+
+void drawAntialiasedCapsule(int x, int y, int width, int height,
+                            uint16_t fill, uint16_t border,
+                            int borderWidth = 2) {
+  fillAntialiasedCapsule(x, y, width, height, border);
+  int inset = max(1, borderWidth);
+  fillAntialiasedCapsule(x + inset, y + inset,
+                         width - inset * 2, height - inset * 2, fill);
+}
+
 void drawStatusPill(const String &text, uint16_t dotColor, uint16_t fill, uint16_t border,
                     uint16_t foreground) {
   constexpr int x = 167;
   constexpr int y = 288;
   constexpr int width = 116;
   constexpr int height = 31;
-  canvas.fillRoundRect(x, y, width, height, 16, fill);
-  canvas.drawRoundRect(x, y, width, height, 16, border);
+  drawAntialiasedCapsule(x, y, width, height, fill, border, 1);
   canvas.fillCircle(x + 20, y + height / 2, 5, dotColor);
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(foreground);
@@ -1204,8 +1483,7 @@ void drawFooterPill(const String &label, const String &value, uint16_t fill, uin
   constexpr int y = 350;
   constexpr int width = 186;
   constexpr int height = 44;
-  canvas.fillRoundRect(x, y, width, height, 22, fill);
-  canvas.drawRoundRect(x, y, width, height, 22, border);
+  drawAntialiasedCapsule(x, y, width, height, fill, border, 1);
   canvas.drawFastVLine(216, 362, 20, rgb(55, 62, 59));
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(muted);
@@ -1267,28 +1545,67 @@ void drawSpeakerIcon(int x, int y, uint16_t color) {
   }
 }
 
-void drawMicrophoneIcon(int x, int y, uint16_t color) {
-  const uint16_t foreground = rgb(247, 243, 241);
-  canvas.drawRoundRect(x - 17, y - 32, 34, 58, 17, foreground);
-  canvas.drawRoundRect(x - 16, y - 31, 32, 56, 16, foreground);
+void drawThickRoundedLine(int x0, int y0, int x1, int y1, int width,
+                          uint16_t color) {
+  float dx = static_cast<float>(x1 - x0);
+  float dy = static_cast<float>(y1 - y0);
+  float length = sqrtf(dx * dx + dy * dy);
+  int radius = max(1, width / 2);
+  if (length < 0.5f) {
+    canvas.fillCircle(x0, y0, radius, color);
+    return;
+  }
+  float px = -dy * radius / length;
+  float py = dx * radius / length;
+  int ax = static_cast<int>(lroundf(x0 + px));
+  int ay = static_cast<int>(lroundf(y0 + py));
+  int bx = static_cast<int>(lroundf(x0 - px));
+  int by = static_cast<int>(lroundf(y0 - py));
+  int cx = static_cast<int>(lroundf(x1 + px));
+  int cy = static_cast<int>(lroundf(y1 + py));
+  int dx2 = static_cast<int>(lroundf(x1 - px));
+  int dy2 = static_cast<int>(lroundf(y1 - py));
+  canvas.fillTriangle(ax, ay, bx, by, cx, cy, color);
+  canvas.fillTriangle(bx, by, cx, cy, dx2, dy2, color);
+  canvas.fillCircle(x0, y0, radius, color);
+  canvas.fillCircle(x1, y1, radius, color);
+}
 
-  int previousX = x - 32;
-  int previousY = y - 2;
-  for (int step = 1; step <= 18; ++step) {
-    float radians = step * PI / 18.0f;
-    int currentX = x - 32 + static_cast<int>(64.0f * step / 18.0f);
-    int currentY = y - 2 + static_cast<int>(32.0f * sinf(radians));
-    canvas.drawLine(previousX, previousY, currentX, currentY, color);
-    canvas.drawLine(previousX, previousY + 1, currentX, currentY + 1, color);
+void drawQuadraticThickRoundedLine(int x0, int y0,
+                                   int controlX, int controlY,
+                                   int x1, int y1,
+                                   int width, uint16_t color) {
+  int previousX = x0;
+  int previousY = y0;
+  for (int step = 1; step <= 16; ++step) {
+    float t = step / 16.0f;
+    float inverse = 1.0f - t;
+    int currentX = static_cast<int>(lroundf(
+        inverse * inverse * x0 + 2.0f * inverse * t * controlX + t * t * x1));
+    int currentY = static_cast<int>(lroundf(
+        inverse * inverse * y0 + 2.0f * inverse * t * controlY + t * t * y1));
+    drawThickRoundedLine(previousX, previousY, currentX, currentY, width, color);
     previousX = currentX;
     previousY = currentY;
   }
-  canvas.drawFastVLine(x - 32, y - 8, 7, color);
-  canvas.drawFastVLine(x - 31, y - 8, 7, color);
-  canvas.drawFastVLine(x + 31, y - 8, 7, color);
-  canvas.drawFastVLine(x + 32, y - 8, 7, color);
-  canvas.fillRoundRect(x - 2, y + 29, 4, 17, 2, foreground);
-  canvas.fillRoundRect(x - 16, y + 44, 32, 4, 2, foreground);
+}
+
+void drawMicrophoneIcon(int left, int top, uint16_t color,
+                        uint16_t background) {
+  // Faithful raster translation of the approved 58 x 107 SVG microphone.
+  canvas.fillRoundRect(left + 8, top, 42, 67, 21, color);
+  canvas.fillRoundRect(left + 15, top + 7, 28, 53, 14, background);
+
+  // The SVG cradle is two quadratic segments, not one shallow quadratic.
+  // Both meet the stand at (29, 82), keeping the microphone visually joined.
+  drawQuadraticThickRoundedLine(left, top + 42,
+                                left, top + 82,
+                                left + 29, top + 82, 7, color);
+  drawQuadraticThickRoundedLine(left + 29, top + 82,
+                                left + 58, top + 82,
+                                left + 58, top + 42, 7, color);
+  drawThickRoundedLine(left + 29, top + 82, left + 29, top + 103, 7, color);
+  drawThickRoundedLine(left + 14, top + 104, left + 44, top + 104, 7, color);
 }
 
 void drawControlOverlay() {
@@ -1469,19 +1786,17 @@ void drawWifiPickerOverlay() {
 }
 
 void drawVoiceOverlay() {
-  const uint16_t background = rgb(9, 9, 10);
-  const uint16_t coral = rgb(255, 117, 106);
-  const uint16_t coralSoft = rgb(255, 151, 141);
-  const uint16_t coralDim = rgb(116, 58, 61);
-  const uint16_t amber = rgb(255, 180, 91);
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t coral = rgb(255, 107, 99);
+  const uint16_t yellow = rgb(255, 196, 0);
   const uint16_t red = rgb(255, 76, 99);
-  const uint16_t inactive = rgb(139, 130, 134);
-  const uint16_t foreground = rgb(247, 243, 241);
-  const uint16_t muted = rgb(141, 135, 138);
-  bool voiceButtonArmed = voiceButtonTracking && !voiceSessionActive;
-  uint16_t accent = voiceCaptureFailed ? red
-                                       : voiceCaptureActive ? coral
-                                                            : voiceButtonArmed ? amber : inactive;
+  const uint16_t muted = rgb(106, 105, 101);
+  bool usbAvailable = typelessUsbAvailable();
+  uint16_t accent = !usbAvailable     ? muted
+                    : voiceCaptureFailed ? red
+                    : voiceCaptureActive ? coral
+                                         : yellow;
 
   int16_t waveform[kVoiceWaveformPoints];
   int levelPercent = 0;
@@ -1501,38 +1816,42 @@ void drawVoiceOverlay() {
                    : -60;
   int meterPercent = constrain((peakDb + 60) * 100 / 60, 0, 100);
 
-  canvas.fillScreen(background);
-
-  String title = voiceCaptureFailed ? "麦克风启动失败"
-                                    : voiceCaptureActive ? "正在收音"
-                                                         : voiceButtonArmed ? "松开开启麦克风"
-                                                                              : "麦克风已关闭";
-  canvas.setTextDatum(middle_center);
-  canvas.setTextColor(voiceCaptureFailed ? red : foreground);
-  useChinese16();
-  canvas.setTextSize(1.15f);
-  int titleWidth = canvas.textWidth(title);
-  canvas.fillCircle(225 - titleWidth / 2 - 14, 50, voiceCaptureActive ? 5 : 4, accent);
-  canvas.drawString(title, 225, 50);
+  String title = !deviceUsbConnected ? "NO USB"
+                 : !usbAvailable     ? "NO BRIDGE"
+                 : voiceCaptureFailed ? "麦克风启动失败"
+                 : voiceCaptureActive ? "正在收音"
+                                      : "麦克风已关闭";
 #if !defined(M5DASH_USB_AUDIO)
-  canvas.setTextColor(red);
-  useChinese16();
-  canvas.drawString("USB 麦克风未启用", 225, 50);
+  title = "USB 未启用";
 #endif
 
-  canvas.setTextColor(rgb(119, 113, 116));
-  useChinese16();
-  canvas.setTextSize(0.75f);
-  canvas.drawString("48 KHZ · USB", 225, 74);
+  drawEditorialBackdrop(coral);
+  drawEditorialHeader("Typeless", title, ink);
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(ink);
+  useEditorialHero80();
+  if (!usbAvailable && deviceUsbConnected) {
+    canvas.drawString("NO", 18, 170);
+    canvas.drawString("BRIDGE", 18, 235);
+  } else {
+    canvas.drawString(!usbAvailable ? "NO USB"
+                      : voiceCaptureFailed ? "ERROR"
+                      : voiceCaptureActive ? "LIVE" : "READY",
+                      18, 205);
+  }
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  if (usbAvailable) canvas.drawString("48 KHZ · USB", 58, 260);
 
-  drawMicrophoneIcon(225, 132, accent);
+  drawMicrophoneIcon(325, 147, ink, coral);
 
-  constexpr int waveLeft = 62;
-  constexpr int waveRight = 388;
-  constexpr int waveCenterY = 234;
-  constexpr int waveHalfHeight = 37;
+  constexpr int waveLeft = 56;
+  constexpr int waveRight = 394;
+  constexpr int waveCenterY = 296;
+  constexpr int waveHalfHeight = 22;
   canvas.drawFastHLine(waveLeft, waveCenterY, waveRight - waveLeft,
-                       rgb(56, 41, 43));
+                       rgb(198, 194, 184));
 
   int previousX = waveLeft;
   int previousY = waveCenterY;
@@ -1544,9 +1863,10 @@ void drawVoiceOverlay() {
     int currentY = waveCenterY - scaled;
     if (index > 0) {
       canvas.drawLine(previousX, previousY, currentX, currentY,
-                      voiceCaptureActive ? coralSoft : coralDim);
+                      voiceCaptureActive ? ink : muted);
       if (voiceCaptureActive) {
-        canvas.drawLine(previousX, previousY + 1, currentX, currentY + 1, coralDim);
+        canvas.drawLine(previousX, previousY + 1, currentX, currentY + 1,
+                        rgb(112, 109, 102));
       }
     }
     previousX = currentX;
@@ -1555,37 +1875,35 @@ void drawVoiceOverlay() {
 
   canvas.setTextDatum(middle_left);
   canvas.setTextColor(muted);
-  useChinese16();
-  canvas.setTextSize(0.9f);
-  canvas.drawString("实时峰值", 74, 294);
+  useEditorialMicro14();
+  canvas.drawString("实时峰值", 60, 328);
   canvas.setTextDatum(middle_right);
-  canvas.setTextColor(foreground);
+  canvas.setTextColor(ink);
   canvas.setFont(&fonts::Font2);
   canvas.setTextSize(1);
-  canvas.drawString(String(peakDb) + " dBFS", 376, 294);
+  canvas.drawString(String(peakDb) + " dBFS", 390, 328);
 
-  constexpr int meterX = 74;
-  constexpr int meterY = 314;
-  constexpr int meterWidth = 302;
-  canvas.fillRoundRect(meterX, meterY, meterWidth, 4, 2, rgb(44, 36, 38));
-  int meterFill = meterWidth * meterPercent / 100;
-  if (voiceCaptureActive && meterFill > 0) {
-    canvas.fillRoundRect(meterX, meterY, meterFill, 4, 2, coral);
+  fillAntialiasedCapsule(kEditorialFooterX, kEditorialFooterY,
+                         kEditorialFooterWidth, kEditorialFooterHeight, ink);
+  canvas.fillCircle(kEditorialFooterX + 28,
+                    kEditorialFooterY + kEditorialFooterHeight / 2, 15, accent);
+  if (voiceCaptureActive) {
+    canvas.fillRoundRect(kEditorialFooterX + 23, kEditorialFooterY + 21,
+                         10, 10, 2, ink);
+  } else {
+    canvas.fillCircle(kEditorialFooterX + 28,
+                      kEditorialFooterY + kEditorialFooterHeight / 2, 5, ink);
   }
-  int levelX = meterX + meterWidth * constrain(levelPercent, 0, 100) / 100;
-  canvas.fillRect(constrain(levelX, meterX, meterX + meterWidth - 2), meterY - 5, 2, 14,
-                  voiceCaptureActive ? foreground : coralDim);
-
-  canvas.drawFastHLine(166, 366, 118, rgb(38, 33, 36));
   canvas.setTextDatum(middle_center);
-  canvas.setTextColor(muted);
-  useChinese16();
-  canvas.setTextSize(0.86f);
-  String hint = voiceCaptureFailed ? "再按一次重试"
-                                   : voiceCaptureActive ? "再按一次关闭麦克风"
-                                                        : voiceButtonArmed ? "松开即可开启麦克风"
-                                                                             : "麦克风已经关闭";
-  canvas.drawString(hint, 225, 393);
+  canvas.setTextColor(background);
+  useEditorialBold18();
+  String hint = !deviceUsbConnected ? "NO USB"
+                : !usbAvailable ? "NO BRIDGE"
+                : voiceCaptureFailed ? "再按一次重试"
+                : voiceCaptureActive ? "轻触中央关闭麦克风"
+                                     : "轻触中央开启麦克风";
+  canvas.drawString(hint, kEditorialFooterX + 137,
+                    kEditorialFooterY + kEditorialFooterHeight / 2 + 1);
 }
 
 TranscriptCollection &activeTranscriptCollection() {
@@ -1660,7 +1978,10 @@ void drawTranscriptTaskRow(const TranscriptTask &task, int y, uint16_t accent,
   canvas.drawString(fitTextToWidth(task.title, 235), 108, y + 23);
   canvas.setTextColor(rgb(151, 147, 156));
   canvas.setTextSize(0.76f);
-  canvas.drawString(String(task.messageCount) + " 条可见消息", 108, y + 45);
+  canvas.drawString(task.contentVisible
+                        ? String(task.messageCount) + " 条可见消息"
+                        : "对话内容保持私密",
+                    108, y + 45);
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(rgb(128, 127, 136));
   canvas.setTextSize(1);
@@ -1768,7 +2089,9 @@ void drawTranscriptOverlay() {
   if (visible == 0) {
     canvas.setTextDatum(middle_center);
     canvas.setTextColor(rgb(151, 147, 156));
-    canvas.drawString("正在等待第一条可见消息", 225, 220);
+    canvas.drawString(task.contentVisible ? "正在等待第一条可见消息"
+                                          : "任务正在运行 · 对话内容保持私密",
+                      225, 220);
   }
   bool latestMessages = transcriptOffsetFromNewest == 0;
   bool taskWorking = task.status.length() == 0 || task.status == "working" ||
@@ -1784,17 +2107,16 @@ struct OrbitTaskItem {
   String title;
 };
 
-bool printerTaskActive() {
-  return printer.connected &&
-         (printer.state == "PRINTING" || printer.state == "RUNNING" ||
-          printer.state == "PREPARING" || printer.state == "PREPARE" ||
-          printer.state == "PAUSED" || printer.state == "PAUSE");
+bool focusTaskActive() {
+  return ticktick.connected &&
+         (timerRunning(ticktick.stopwatchState) || timerPaused(ticktick.stopwatchState) ||
+          timerRunning(ticktick.countdownState) || timerPaused(ticktick.countdownState));
 }
 
 size_t buildOrbitTasks(OrbitTaskItem (&items)[5]) {
   size_t count = 0;
-  if (printerTaskActive() && count < 5) {
-    items[count++] = {'P', -1, printer.file.length() > 0 ? printer.file : "当前打印任务"};
+  if (focusTaskActive() && count < 5) {
+    items[count++] = {'F', -1, tickTickStatusCN()};
   }
   for (size_t index = 0; index < codexTranscripts.taskCount && count < 5; ++index) {
     items[count++] = {'C', static_cast<int>(index), codexTranscripts.tasks[index].title};
@@ -1820,7 +2142,7 @@ void orbitTaskPosition(size_t index, size_t count, int &x, int &y) {
 }
 
 uint16_t providerAccent(char provider) {
-  if (provider == 'P') return rgb(66, 207, 145);
+  if (provider == 'F') return rgb(255, 104, 115);
   if (provider == 'A') return rgb(240, 162, 125);
   return rgb(155, 158, 255);
 }
@@ -1867,7 +2189,7 @@ void drawTaskOrbitOverlay() {
     canvas.setTextColor(accent);
     useNumberFont();
     String shortLabel = String(items[index].provider);
-    if (items[index].provider != 'P') shortLabel += String(items[index].transcriptIndex + 1);
+    if (items[index].provider != 'F') shortLabel += String(items[index].transcriptIndex + 1);
     canvas.drawString(shortLabel, x, y + 1);
   }
   canvas.setTextColor(rgb(112, 113, 124));
@@ -2074,12 +2396,35 @@ void updateResultBallImuAnimation() {
   }
 }
 
+void updateObsidianDiceShake() {
+  if (currentPage != 6 || overlayMode != OverlayMode::none ||
+      obsidianDice.availableCount <= 0 || !M5.Imu.isEnabled()) {
+    obsidianShakePreviousReady = false;
+    return;
+  }
+  uint32_t now = millis();
+  M5.Imu.update();
+  float accelX = 0.0f;
+  float accelY = 0.0f;
+  float accelZ = 0.0f;
+  if (!M5.Imu.getAccel(&accelX, &accelY, &accelZ)) return;
+  float deltaX = accelX - obsidianShakePreviousX;
+  float deltaY = accelY - obsidianShakePreviousY;
+  float deltaZ = accelZ - obsidianShakePreviousZ;
+  bool rolled = dashboardShakeDetected(obsidianShakePreviousReady,
+                                       deltaX, deltaY, deltaZ, now,
+                                       lastObsidianShakeAt, 900, 0.78f);
+  obsidianShakePreviousX = accelX;
+  obsidianShakePreviousY = accelY;
+  obsidianShakePreviousZ = accelZ;
+  obsidianShakePreviousReady = true;
+  if (!rolled) return;
+  lastObsidianShakeAt = now;
+  performObsidianAction("roll");
+}
+
 size_t visibleDashboardResultCount() {
-  size_t count = dashboardResults.count;
-  bool printerFinished = printer.connected &&
-                         (printer.state == "FINISHED" || printer.state == "FINISH");
-  if (printerFinished && count < kMaxDashboardResults) ++count;
-  return count;
+  return dashboardResults.count;
 }
 
 void drawResultsOverlay() {
@@ -2092,9 +2437,7 @@ void drawResultsOverlay() {
   canvas.drawString("今日成果", 225, 57);
 
   size_t count = dashboardResults.count;
-  bool printerFinished = printer.connected &&
-                         (printer.state == "FINISHED" || printer.state == "FINISH");
-  if (count == 0 && !printerFinished) {
+  if (count == 0) {
     canvas.setTextColor(rgb(142, 143, 154));
     canvas.drawString("今天还没有可展示的成果", 225, 230);
     canvas.drawString("完成任务后会自动汇聚成星球", 225, 262);
@@ -2107,10 +2450,6 @@ void drawResultsOverlay() {
        ++index) {
     visible[visibleCount++] = dashboardResults.items[index];
   }
-  if (visibleCount < kMaxDashboardResults && printerFinished) {
-    visible[visibleCount++] = {'P', printer.file.length() > 0 ? printer.file : "打印任务完成", 0};
-  }
-
   if (selectedResult >= static_cast<int>(visibleCount)) selectedResult = -1;
   if (selectedResult >= 0) {
     const DashboardResult &item = visible[selectedResult];
@@ -2119,7 +2458,7 @@ void drawResultsOverlay() {
     canvas.fillCircle(225, 183, 10, accent);
     canvas.setTextColor(accent);
     useChinese16();
-    canvas.drawString(item.provider == 'A' ? "Claude" : item.provider == 'P' ? "P2S" : "Codex",
+    canvas.drawString(item.provider == 'A' ? "Claude" : "Codex",
                       225, 211);
     canvas.setTextColor(rgb(245, 245, 247));
     useChinese16();
@@ -2167,6 +2506,16 @@ void openTranscript() {
 
 void drawOverlay() {
   if (!overlayVisible()) return;
+  // Full-screen overlays replace the editorial page. Do not let its accent
+  // circle survive in the 8 px frame around the 450 px design canvas.
+  if (overlayMode == OverlayMode::connection ||
+      overlayMode == OverlayMode::wifiPicker ||
+      overlayMode == OverlayMode::transcript ||
+      overlayMode == OverlayMode::orbit ||
+    overlayMode == OverlayMode::results) {
+    editorialFrameAccentActive = false;
+    editorialFrameBurstActive = false;
+  }
   if (overlayMode == OverlayMode::connection) {
     drawConnectionOverlay();
   } else if (overlayMode == OverlayMode::wifiPicker) {
@@ -2235,6 +2584,13 @@ void drawCompletionOverlay(uint32_t now) {
   uint32_t elapsed = static_cast<uint32_t>(now - completionAnimationStartedAt);
   DashboardCompletionAnimationFrame frame = dashboardCompletionAnimationFrame(elapsed);
   if (!frame.visible) return;
+
+  // This overlay replaces the entire provider/editorial frame. Clear any
+  // outer-frame decoration left by the page rendered immediately before it;
+  // otherwise the 8 px physical margin leaks paper or the previous accent
+  // circle as four bright slivers around the round display.
+  editorialFrameAccentActive = false;
+  editorialFrameBurstActive = false;
 
   bool claudeProvider = completionProvider == 'A';
   uint8_t backgroundR = claudeProvider ? 15 : 7;
@@ -2391,45 +2747,83 @@ void drawClockCalendarIcon(int left, int top, uint16_t color) {
   canvas.fillCircle(left + 17, top + 14, 1, color);
 }
 
-void drawClockShortcutDock() {
-  constexpr int y = 332;
-  constexpr int width = 120;
-  constexpr int height = 50;
-  constexpr int leftX = 97;
-  constexpr int rightX = 233;
-  const uint16_t surface = rgb(25, 29, 49);
-  const uint16_t foreground = rgb(245, 245, 247);
-  const uint16_t codexAccent = rgb(141, 130, 255);
-  const uint16_t resultAccent = rgb(255, 181, 83);
-  canvas.fillRoundRect(leftX, y, width, height, 18, surface);
-  canvas.fillRoundRect(rightX, y, width, height, 18, surface);
-
-  constexpr int iconY = y + height / 2;
-  constexpr int orbitX = 120;
-  canvas.drawLine(orbitX, iconY - 10, orbitX, iconY + 10, codexAccent);
-  canvas.drawLine(orbitX - 10, iconY, orbitX + 10, iconY, codexAccent);
-  canvas.drawLine(orbitX - 7, iconY - 7, orbitX + 7, iconY + 7, codexAccent);
-  canvas.drawLine(orbitX + 7, iconY - 7, orbitX - 7, iconY + 7, codexAccent);
-  canvas.fillCircle(orbitX, iconY, 3, surface);
-
-  constexpr int planetX = 256;
-  canvas.drawCircle(planetX, iconY, 8, resultAccent);
-  canvas.drawEllipse(planetX, iconY, 13, 5, resultAccent);
-  canvas.fillCircle(planetX + 10, iconY - 8, 2, resultAccent);
-
-  canvas.setTextDatum(middle_left);
-  canvas.setTextColor(foreground);
-  useChinese16();
-  canvas.setTextSize(1.25f);
-  canvas.drawString("星盘", 143, iconY + 1);
-  canvas.drawString("成果", 279, iconY + 1);
-  canvas.setTextSize(1);
+void drawEditorialBackdrop(uint16_t accent) {
+  editorialFrameAccentActive = true;
+  editorialFrameAccent = accent;
+  canvas.fillScreen(editorialPaperColor());
+  canvas.fillSmoothCircle(364, 130, 164, accent);
 }
 
-int clockUsagePercent(const CodexData &provider) {
-  int value = provider.weekUsedPercent >= 0 ? provider.weekUsedPercent
-                                            : provider.shortUsedPercent;
-  return value >= 0 ? dashboardRemainingPercent(value) : 0;
+void drawEditorialHeader(const String &primary, const String &secondary,
+                         uint16_t ink) {
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(ink);
+  useEditorialBold24();
+  canvas.drawString(primary, kEditorialHeaderX, kEditorialHeaderFirstLineY);
+  canvas.drawString(secondary, kEditorialHeaderX, kEditorialHeaderSecondLineY);
+  canvas.fillRect(kEditorialHeaderX, kEditorialHeaderUnderlineY, 52, 4, ink);
+}
+
+void drawEditorialHero(const String &value, int x, int y, int maxWidth,
+                       uint16_t ink, float maxScale = 1.34f) {
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(ink);
+  useEditorialHero104();
+  canvas.drawString(value, x, y);
+}
+
+void drawEditorialMetricPill(int x, const String &label, const String &value,
+                             bool filled, uint16_t accent, uint16_t background,
+                             uint16_t ink, uint16_t yellow) {
+  constexpr int y = 282;
+  constexpr int width = 175;
+  constexpr int height = 50;
+  uint16_t fill = filled ? ink : background;
+  uint16_t labelColor = filled ? rgb(201, 199, 192) : rgb(106, 105, 101);
+  uint16_t valueColor = filled ? background : ink;
+  fillAntialiasedCapsule(x, y, width, height, fill);
+  if (!filled) {
+    drawAntialiasedCapsule(x, y, width, height, background, yellow);
+  }
+  canvas.fillCircle(x + 27, y + 25, 7, filled ? accent : yellow);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(labelColor);
+  useEditorialMicro14();
+  canvas.drawString(label, x + 103, y + 16);
+  canvas.setTextColor(valueColor);
+  useEditorialBold18();
+  canvas.drawString(value, x + 103, y + 34);
+}
+
+void drawClockShortcutDock() {
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t yellow = rgb(255, 196, 0);
+  fillAntialiasedCapsule(kClockOrbitActionX, kClockActionY,
+                         kClockActionWidth, kClockActionHeight, ink);
+  drawAntialiasedCapsule(kClockResultsActionX, kClockActionY,
+                         kClockActionWidth, kClockActionHeight,
+                         background, yellow);
+
+  constexpr int iconY = kClockActionY + kClockActionHeight / 2;
+  constexpr int orbitX = kClockOrbitActionX + 24;
+  canvas.fillCircle(orbitX, iconY, 14, background);
+  canvas.drawLine(orbitX, iconY - 7, orbitX, iconY + 7, ink);
+  canvas.drawLine(orbitX - 7, iconY, orbitX + 7, iconY, ink);
+  canvas.drawLine(orbitX - 5, iconY - 5, orbitX + 5, iconY + 5, ink);
+  canvas.drawLine(orbitX + 5, iconY - 5, orbitX - 5, iconY + 5, ink);
+
+  constexpr int resultX = kClockResultsActionX + 24;
+  canvas.fillCircle(resultX, iconY, 14, yellow);
+  canvas.drawCircle(resultX, iconY, 6, ink);
+  canvas.drawEllipse(resultX, iconY, 9, 4, ink);
+
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(background);
+  useEditorialBold18();
+  canvas.drawString("星盘", kClockOrbitActionX + 78, iconY + 1);
+  canvas.setTextColor(ink);
+  canvas.drawString("成果", kClockResultsActionX + 78, iconY + 1);
 }
 
 void drawClockProgressSegment(int startAngle, int endAngle, int percent,
@@ -2443,43 +2837,42 @@ void drawClockProgressSegment(int startAngle, int endAngle, int percent,
 }
 
 void drawClockPage() {
-  const uint16_t background = rgb(8, 9, 12);
-  canvas.fillScreen(background);
-  drawClockProgressSegment(-95, 21, printer.connected ? printer.progress : 0,
-                           rgb(22, 36, 30), printerColor());
-  drawClockProgressSegment(25, 141, clockUsagePercent(claude),
-                           rgb(59, 40, 37), rgb(255, 123, 84));
-  drawClockProgressSegment(145, 261, clockUsagePercent(codex),
-                           rgb(33, 41, 71), rgb(83, 104, 255));
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t mint = rgb(24, 229, 161);
+  const uint16_t yellow = rgb(255, 196, 0);
+  drawEditorialBackdrop(mint);
+  drawEditorialHeader("时钟", "总览", ink);
 
-  struct tm local = {};
-  uint32_t now = millis();
-  bool timeReady = clockLocalTime(local);
-  if (timeReady) {
-    drawParticleTime(local, now);
-  } else {
-    canvas.setTextDatum(middle_center);
-    canvas.setTextColor(rgb(245, 245, 247));
-    useNumberFont();
-    canvas.drawString("--:--", 225, 157);
+  int focusPercent = 0;
+  if (timerRunning(ticktick.countdownState) || timerPaused(ticktick.countdownState)) {
+    int duration = max(1, ticktick.countdownDuration);
+    focusPercent = 100 - currentCountdownRemaining() * 100 / duration;
+  } else if (timerRunning(ticktick.stopwatchState) || timerPaused(ticktick.stopwatchState)) {
+    focusPercent = min(100, currentStopwatchElapsed() * 100 / 5400);
   }
-  drawBatteryStatusAt(background, rgb(142, 145, 160), 190, 72);
+  struct tm local = {};
+  bool timeReady = clockLocalTime(local);
+  String timeText = "--:--";
+  if (timeReady) {
+    char buffer[8];
+    snprintf(buffer, sizeof(buffer), "%02d:%02d", local.tm_hour, local.tm_min);
+    timeText = String(buffer);
+  }
+  drawEditorialHero(timeText, 26, 205, 394, ink, 1.28f);
+  if (timeReady) {
+    drawClockSecondValue(canvas, 0, 0, local.tm_sec, mint, ink);
+    lastClockDrawSecond = local.tm_sec;
+    lastClockDrawMinute = local.tm_hour * 60 + local.tm_min;
+  } else {
+    lastClockDrawSecond = -1;
+    lastClockDrawMinute = -1;
+  }
+  drawBatteryStatusAt(mint, ink, 326, 76, false);
 
   String weatherText = weather.available
                            ? weather.label + " · " + String(weather.temperatureC, 0) + "℃"
                            : "天气暂不可用 · --℃";
-  canvas.setTextColor(rgb(245, 245, 247));
-  useChinese16();
-  canvas.setTextSize(1.35f);
-  int weatherTextWidth = canvas.textWidth(weatherText);
-  int weatherLeft = 225 - (28 + 10 + weatherTextWidth) / 2;
-  drawClockWeatherIcon(weatherLeft + 14, 286, weather.available ? weather.code : 3,
-                       weather.available ? rgb(240, 189, 99) : rgb(112, 113, 124));
-  canvas.setTextDatum(middle_left);
-  canvas.drawString(weatherText, weatherLeft + 38, 286);
-
-  canvas.setTextColor(rgb(200, 204, 218));
-  canvas.setTextSize(1.15f);
   String date;
   if (timeReady) {
     static const char *weekdays[] = {"日", "一", "二", "三", "四", "五", "六"};
@@ -2488,136 +2881,522 @@ void drawClockPage() {
   } else {
     date = "等待校时";
   }
-  int dateTextWidth = canvas.textWidth(date);
-  int dateLeft = 225 - (22 + 10 + dateTextWidth) / 2;
-  drawClockCalendarIcon(dateLeft, 210, rgb(174, 180, 199));
+
+  canvas.setTextColor(ink);
+  useEditorialBold18();
   canvas.setTextDatum(middle_left);
-  canvas.drawString(date, dateLeft + 32, 221);
-  canvas.setTextSize(1);
+  canvas.drawString(date, 58, 260);
+
+  fillAntialiasedCapsule(58, 282, 143, 42, ink);
+  canvas.fillCircle(81, 303, 7, yellow);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(background);
+  useEditorialMicro14();
+  canvas.drawString(weatherText, 135, 303);
+
+  drawAntialiasedCapsule(213, 282, 179, 42, background, yellow);
+  canvas.fillCircle(236, 303, 7, mint);
+  canvas.setTextColor(ink);
+  useEditorialMicro14();
+  String usageText = "--";
+  if (aiUsage.connected && aiUsage.complete) {
+    usageText = String(aiUsage.approximate ? "~" : "") +
+                formatCount(aiUsage.todayTotalTokens);
+  }
+  String focusText = "专" + String(max(0, min(100, focusPercent))) +
+                     " · AI" + usageText;
+  canvas.drawString(focusText, 311, 303);
   drawClockShortcutDock();
-  drawPageIndicator(rgb(245, 245, 247), rgb(70, 71, 80));
 }
 
-void drawPrinterPage() {
-  const uint16_t background = rgb(5, 14, 10);
-  const uint16_t foreground = rgb(240, 248, 244);
-  const uint16_t muted = rgb(130, 148, 140);
-  const uint16_t track = rgb(22, 36, 30);
-  const uint16_t active = printerColor();
+void drawClockSecondOnly(const struct tm &local) {
+  if (!clockSecondCanvasReady) {
+    drawCurrentPage();
+    return;
+  }
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t mint = rgb(24, 229, 161);
+  drawClockSecondValue(clockSecondCanvas, kClockSecondPatchX, kClockSecondPatchY,
+                       local.tm_sec, mint, ink);
+  int frameOffset = designFrameOffset();
+  M5.Display.startWrite();
+  clockSecondCanvas.pushSprite(
+      displayFrameOffsetX() + frameOffset + kClockSecondPatchX,
+      displayFrameOffsetY() + frameOffset + kClockSecondPatchY);
+  M5.Display.endWrite();
+  lastClockDrawSecond = local.tm_sec;
+  lastClockDrawMinute = local.tm_hour * 60 + local.tm_min;
+}
 
-  drawRoundScreenBase(background, track, printer.progress, active);
+void drawFocusHeroTime(const String &value, uint16_t ink) {
+  String primary = value;
+  String seconds;
+  if (value.length() > 5) {
+    int split = value.lastIndexOf(':');
+    if (split > 0) {
+      primary = value.substring(0, split);
+      seconds = value.substring(split + 1);
+    }
+  }
+
+  canvas.setTextColor(ink);
+  canvas.setTextDatum(middle_left);
+  useEditorialHero104();
+  canvas.drawString(primary, 28, 205);
+
+  if (seconds.length() > 0) {
+    canvas.setTextDatum(middle_center);
+    useEditorialBold24();
+    canvas.drawString(seconds, 382, 225);
+    canvas.fillRect(359, 250, 46, 5, ink);
+  }
+}
+
+void drawFocusModeOption(int x, int width, const String &key, const String &label,
+                         bool selected, uint16_t background, uint16_t ink,
+                         uint16_t yellow) {
+  if (selected) {
+    fillAntialiasedCapsule(x, 282, width, 50, ink);
+  } else {
+    drawAntialiasedCapsule(x, 282, width, 50, background, yellow);
+  }
+
+  const uint16_t keyFill = selected ? background : yellow;
+  const uint16_t textColor = selected ? background : ink;
+  canvas.fillCircle(x + 27, 307, 16, keyFill);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(ink);
+  useEditorialBold18();
+  canvas.drawString(key, x + 27, 307);
+  canvas.setTextColor(textColor);
+  useEditorialBold18();
+  canvas.drawString(label, x + width / 2 + 16, 307);
+}
+
+void drawFocusActions(const String &key, bool running, bool paused,
+                      uint16_t background, uint16_t ink) {
+  String action = running ? "暂停" : paused ? "继续" : "开始";
+  const int actionCenterY = kFocusActionY + kFocusActionHeight / 2;
+  const int primaryKeyX = kFocusPrimaryActionX + 26;
+  const int primaryLabelX = kFocusPrimaryActionX + 108;
+  const int endCenterX = kFocusEndActionX + kFocusEndActionWidth / 2;
+
+  fillAntialiasedCapsule(kFocusPrimaryActionX, kFocusActionY,
+                         kFocusPrimaryActionWidth, kFocusActionHeight, ink);
+  canvas.fillCircle(primaryKeyX, actionCenterY, 15, background);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(ink);
+  useEditorialBold18();
+  canvas.drawString(key, primaryKeyX, actionCenterY);
+  canvas.setTextColor(background);
+  useEditorialBold24();
+  canvas.drawString(action, primaryLabelX, actionCenterY);
+
+  drawAntialiasedCapsule(kFocusEndActionX, kFocusActionY,
+                         kFocusEndActionWidth, kFocusActionHeight,
+                         background, ink);
+  canvas.setTextColor(ink);
+  useEditorialMicro14();
+  canvas.drawString("结束", endCenterX, actionCenterY);
+}
+
+bool focusUsesStopwatchMode() {
+  bool stopwatchActive = timerRunning(ticktick.stopwatchState) ||
+                         timerPaused(ticktick.stopwatchState);
+  bool countdownActive = timerRunning(ticktick.countdownState) ||
+                         timerPaused(ticktick.countdownState);
+  return stopwatchActive || !countdownActive;
+}
+
+void drawFocusPage() {
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t coral = rgb(255, 59, 48);
+  const uint16_t yellow = rgb(255, 196, 0);
+  bool stopwatchMode = focusUsesStopwatchMode();
+  bool running = stopwatchMode ? timerRunning(ticktick.stopwatchState)
+                               : timerRunning(ticktick.countdownState);
+  bool paused = stopwatchMode ? timerPaused(ticktick.stopwatchState)
+                              : timerPaused(ticktick.countdownState);
+  String heroValue = stopwatchMode ? formatTimerSeconds(currentStopwatchElapsed())
+                                   : formatTimerSeconds(currentCountdownRemaining());
+
+  drawEditorialBackdrop(coral);
+
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(ink);
+  useEditorialBold24();
+  canvas.drawString(ticktick.connected ? "专注" : "等待", kFocusStatusX,
+                    kFocusStatusFirstLineY);
+  canvas.drawString(!ticktick.connected ? "连接" : running ? "进行中" : paused ? "已暂停"
+                                                                       : "准备好",
+                    kFocusStatusX, kFocusStatusSecondLineY);
+  canvas.fillRect(kFocusStatusX, kFocusStatusUnderlineY, 52, 4, ink);
+
+  drawFocusHeroTime(heroValue, ink);
+  drawFocusModeOption(52, 175, "A", "正计时", stopwatchMode, background, ink, yellow);
+  drawFocusModeOption(225, 175, "B", "25分钟", !stopwatchMode, background, ink, yellow);
+  drawFocusActions(stopwatchMode ? "A" : "B", running, paused, background, ink);
+}
+
+String providerEditorialStatus(const CodexData &provider) {
+  if (!provider.connected) return "离线";
+  if (provider.waiting > 0) return "等待确认";
+  if (provider.active > 0) return "正在工作";
+  if (provider.errors > 0) return "需要检查";
+  return "当前空闲";
+}
+
+void drawProviderQuotaHero(int remainingPercent, uint16_t ink) {
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(ink);
+  useEditorialHero104();
+  if (remainingPercent < 0) {
+    canvas.drawString("--", 28, 205);
+    return;
+  }
+
+  // M5GFX's VLW renderer allocates one complete glyph bitmap on the loop-task
+  // stack. Noto Bold 104's percent glyph is 100 x 79 (7,900 bytes), which the
+  // device core dump proved can overflow that stack. Keep the native 104 px
+  // digits, then draw a separately embedded 96 px RGBA glyph. It is nearly as
+  // tall as the digits, retains true antialiasing across both page colours,
+  // and bypasses the VLW stack allocation that caused the provider reboot.
+  String digits(remainingPercent);
+  canvas.drawString(digits, 28, 205);
+  int markLeft = 28 + canvas.textWidth(digits) + 3;
+  int markTop = 205 - static_cast<int>(provider_percent_96_png_height) / 2;
+  canvas.drawPng(provider_percent_96_png, provider_percent_96_png_len,
+                 markLeft, markTop,
+                 provider_percent_96_png_width, provider_percent_96_png_height,
+                 0, 0, 1.0f, 1.0f, datum_t::top_left);
+}
+
+void drawProviderResetArrow(int centerX, int centerY, uint16_t color) {
+  // Draw the reset mark as geometry. Noto CJK maps U+21BA to its .notdef
+  // placeholder on this device, even though the codepoint exists in the VLW.
+  canvas.fillArc(centerX, centerY, 7, 5, 38, 320, color);
+  canvas.fillTriangle(centerX - 8, centerY - 5,
+                      centerX - 2, centerY - 7,
+                      centerX - 3, centerY - 1, color);
+}
+
+void drawProviderEditorialFooter(const CodexData &provider, int resetMinutes,
+                                 uint16_t accent,
+                                 uint16_t background, uint16_t ink) {
+  fillAntialiasedCapsule(kEditorialFooterX, kEditorialFooterY,
+                         kEditorialFooterWidth, kEditorialFooterHeight, ink);
+  canvas.fillCircle(kEditorialFooterX + 28,
+                    kEditorialFooterY + kEditorialFooterHeight / 2, 7, accent);
+
+  String firstLine;
+  String secondLine;
+  bool showResetArrow = false;
+  if (provider.active > 0) {
+    firstLine = String(provider.active) + " 个活动任务";
+    secondLine = "轻触图标查看详情";
+  } else if (provider.waiting > 0) {
+    firstLine = String(provider.waiting) + " 个任务等待确认";
+    secondLine = "请在电脑端继续";
+  } else if (provider.errors > 0) {
+    firstLine = "发现异常状态";
+    secondLine = "请在电脑端检查";
+  } else {
+    if (resetMinutes >= 0) {
+      firstLine = formatDurationCompact(resetMinutes);
+      showResetArrow = true;
+    } else {
+      firstLine = "重置待同步";
+    }
+    secondLine = "暂无活动任务";
+  }
 
   canvas.setTextDatum(middle_center);
-  canvas.setTextColor(rgb(168, 183, 176));
+  uint16_t muted = rgb(201, 199, 192);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  int firstLineCenterX = kEditorialFooterX + 129;
+  int firstLineCenterY = kEditorialFooterY + 17;
+  if (showResetArrow) {
+    int textWidth = canvas.textWidth(firstLine);
+    constexpr int iconWidth = 16;
+    constexpr int iconGap = 4;
+    int groupWidth = iconWidth + iconGap + textWidth;
+    int groupLeft = firstLineCenterX - groupWidth / 2;
+    drawProviderResetArrow(groupLeft + iconWidth / 2, firstLineCenterY, muted);
+    canvas.drawString(firstLine,
+                      groupLeft + iconWidth + iconGap + textWidth / 2,
+                      firstLineCenterY);
+  } else {
+    canvas.drawString(firstLine, firstLineCenterX, firstLineCenterY);
+  }
+  canvas.setTextColor(background);
+  useEditorialBold18();
+  canvas.drawString(secondLine, kEditorialFooterX + 129, kEditorialFooterY + 37);
+}
+
+void drawProviderEditorialPage(CodexData &provider, bool claudeProvider) {
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t yellow = rgb(255, 196, 0);
+  const uint16_t accent = claudeProvider ? rgb(226, 122, 86) : rgb(95, 103, 255);
+  bool showWeek = claudeProvider || provider.weekUsedPercent >= 0;
+  int mainUsedPercent = showWeek ? provider.weekUsedPercent : provider.shortUsedPercent;
+  int mainPercent = dashboardRemainingPercent(mainUsedPercent);
+  int mainReset = showWeek ? provider.weekResetInMin : provider.shortResetInMin;
+  String mainLabel = showWeek ? "本周剩余额度" : "五小时剩余额度";
+
+  markRenderDiagnostic(201, currentPage);
+  drawEditorialBackdrop(accent);
+  markRenderDiagnostic(202, currentPage);
+  drawEditorialHeader(claudeProvider ? "Claude" : "Codex",
+                      providerEditorialStatus(provider), ink);
+  markRenderDiagnostic(203, currentPage);
+  drawProviderQuotaHero(mainPercent, ink);
+  markRenderDiagnostic(204, currentPage);
+
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(rgb(93, 92, 89));
+  useEditorialMicro14();
+  canvas.drawString(mainLabel, 58, 260);
+
+  if (claudeProvider) {
+    drawClaudeIcon(accent);
+  } else {
+    drawCodexIcon(accent);
+  }
+  markRenderDiagnostic(205, currentPage);
+
+  drawEditorialMetricPill(52, "今日用量", formatCount(provider.todayTokens),
+                          true, accent, background, ink, yellow);
+  drawEditorialMetricPill(225, "累计", formatCount(provider.lifetimeTokens),
+                          false, accent, background, ink, yellow);
+  markRenderDiagnostic(206, currentPage);
+  drawProviderEditorialFooter(provider, mainReset, accent,
+                              background, ink);
+  markRenderDiagnostic(207, currentPage);
+}
+
+void drawRegressionSafeProviderIcon(bool claudeProvider, uint16_t background) {
+  if (claudeProvider) {
+    canvas.drawPng(claude_icon_png, claude_icon_png_len,
+                   177, 170, 96, 96,
+                   0, 0, 1.0f, 1.0f, datum_t::top_left);
+  } else {
+    canvas.drawPng(codex_icon_png, codex_icon_png_len,
+                   177, 170, 96, 96,
+                   0, 0, 1.0f, 1.0f, datum_t::top_left);
+  }
+  maskRoundedImageCorners(177, 170, 96, 96, 22, background);
+}
+
+void drawRegressionSafeProviderPage(CodexData &provider, bool claudeProvider) {
+  const uint16_t background = claudeProvider ? rgb(15, 11, 9) : rgb(7, 8, 17);
+  const uint16_t foreground = claudeProvider ? rgb(250, 249, 245) : rgb(243, 243, 248);
+  const uint16_t muted = claudeProvider ? rgb(176, 174, 165) : rgb(142, 145, 160);
+  const uint16_t track = claudeProvider ? rgb(54, 42, 37) : rgb(34, 37, 57);
+  const uint16_t active = claudeProvider ? rgb(217, 119, 87) : rgb(95, 103, 255);
+  const uint16_t metricLine = claudeProvider ? rgb(71, 52, 44) : 0;
+
+  bool showWeek = claudeProvider || provider.weekUsedPercent >= 0;
+  int mainUsedPercent = showWeek ? provider.weekUsedPercent : provider.shortUsedPercent;
+  int mainPercent = dashboardRemainingPercent(mainUsedPercent);
+  int mainReset = showWeek ? provider.weekResetInMin : provider.shortResetInMin;
+
+  drawRoundScreenBase(background, track, mainPercent, active);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(claudeProvider ? rgb(185, 173, 167) : rgb(163, 166, 188));
   useChinese16();
-  canvas.drawString("打印进度", 225, 48);
+  canvas.drawString(showWeek ? "本周额度" : "五小时额度", 225, 48);
 
   canvas.setTextColor(foreground);
   useNumberFont();
-  canvas.drawString(String(printer.progress) + "%", 225, 78);
+  canvas.drawString(mainPercent >= 0 ? String(mainPercent) + "%" : "--", 225, 78);
   drawBatteryStatus(background, muted);
 
-  drawMetric("喷嘴", String(printer.nozzle, 0) + "℃", 104, 136, 169, 78, 130,
-             muted, foreground, true);
-  drawMetric("热床", String(printer.bed, 0) + "℃", 346, 136, 169, 320, 372,
-             muted, foreground, true);
-  drawMetric("打印层数",
-             printer.totalLayers > 0 ? String(printer.layer) + "/" + String(printer.totalLayers)
-                                     : String(printer.layer),
-             112, 267, 301, 81, 143, muted, foreground);
-  drawMetric("机舱", printer.chamber > 0 ? String(printer.chamber, 0) + "℃" : "--",
-             338, 267, 301, 312, 364, muted, foreground, true);
+  drawMetric("活动任务", String(provider.active), 104, 136, 169, 78, 130,
+             muted, foreground, false, metricLine);
+  drawMetric("等待确认", String(provider.waiting), 346, 136, 169, 320, 372,
+             muted, foreground, false, metricLine);
+  drawMetric("今日用量", formatCount(provider.todayTokens), 112, 267, 301, 81, 143,
+             muted, foreground, false, metricLine);
+  if (!claudeProvider && showWeek && provider.shortUsedPercent >= 0) {
+    drawMetric("五时剩余",
+               String(dashboardRemainingPercent(provider.shortUsedPercent)) + "%",
+               338, 267, 301, 312, 364, muted, foreground, false, metricLine);
+  } else {
+    drawMetric("累计", formatLifetimeUsage(provider.lifetimeTokens),
+               338, 267, 301, 312, 364, muted, foreground, true, metricLine);
+  }
 
-  drawBambuLogo(background);
-  drawStatusPill(printerStatusCN(), active, rgb(13, 34, 23), rgb(31, 84, 50),
-                 rgb(175, 243, 195));
-  drawFooterPill("预计剩余", formatDurationCN(printer.remainingMin), rgb(12, 29, 22),
-                 rgb(39, 65, 54), muted, rgb(222, 255, 235));
-  drawPageIndicator(active, rgb(63, 80, 72));
+  drawRegressionSafeProviderIcon(claudeProvider, background);
+  drawStatusPill(claudeProvider ? claudeStatusCN() : codexStatusCN(),
+                 claudeProvider ? claudeStatusColor() : codexStatusColor(),
+                 claudeProvider ? rgb(40, 31, 27) : rgb(22, 24, 39),
+                 claudeProvider ? rgb(105, 64, 51) : rgb(66, 70, 96),
+                 claudeProvider ? rgb(241, 234, 230) : rgb(224, 225, 241));
+  drawFooterPill(showWeek ? "周额重置" : "额度重置", formatDurationCN(mainReset),
+                 claudeProvider ? rgb(33, 27, 24) : rgb(22, 23, 29),
+                 claudeProvider ? rgb(75, 57, 49) : rgb(58, 60, 67),
+                 muted, foreground);
+  drawPageIndicator(active, claudeProvider ? rgb(81, 68, 62) : rgb(66, 69, 88));
 }
 
 void drawCodexPage() {
-  const uint16_t background = rgb(7, 8, 17);
-  const uint16_t foreground = rgb(243, 243, 248);
-  const uint16_t muted = rgb(142, 145, 160);
-  const uint16_t track = rgb(34, 37, 57);
-  const uint16_t active = rgb(95, 103, 255);
-
-  bool showWeek = codex.weekUsedPercent >= 0;
-  int mainUsedPercent = showWeek ? codex.weekUsedPercent : codex.shortUsedPercent;
-  int mainPercent = dashboardRemainingPercent(mainUsedPercent);
-  int mainReset = showWeek ? codex.weekResetInMin : codex.shortResetInMin;
-  String mainLabel = showWeek ? "本周额度" : "五小时额度";
-
-  drawRoundScreenBase(background, track, mainPercent, active);
-
-  canvas.setTextDatum(middle_center);
-  canvas.setTextColor(rgb(163, 166, 188));
-  useChinese16();
-  canvas.drawString(mainLabel, 225, 48);
-
-  canvas.setTextColor(rgb(245, 244, 255));
-  useNumberFont();
-  canvas.drawString((mainPercent >= 0 ? String(mainPercent) + "%" : "--"), 225, 78);
-  drawBatteryStatus(background, muted);
-
-  drawMetric("活动任务", String(codex.active), 104, 136, 169, 78, 130, muted, foreground);
-  drawMetric("等待确认", String(codex.waiting), 346, 136, 169, 320, 372, muted, foreground);
-  drawMetric("今日用量", formatCount(codex.todayTokens), 112, 267, 301, 81, 143, muted, foreground);
-
-  if (showWeek && codex.shortUsedPercent >= 0) {
-    drawMetric("五时剩余", String(dashboardRemainingPercent(codex.shortUsedPercent)) + "%", 338, 267, 301,
-               312, 364, muted, foreground);
-  } else {
-    drawMetric("累计", formatLifetimeUsage(codex.lifetimeTokens), 338, 267, 301, 312, 364,
-               muted, foreground, true);
+  if (kProviderRegressionSafeRenderer) {
+    drawRegressionSafeProviderPage(codex, false);
+    return;
   }
-
-  drawCodexIcon(background);
-  drawStatusPill(codexStatusCN(), codexStatusColor(), rgb(22, 24, 39), rgb(66, 70, 96),
-                 rgb(224, 225, 241));
-  drawFooterPill(showWeek ? "周额重置" : "额度重置", formatDurationCN(mainReset),
-                 rgb(22, 23, 29), rgb(58, 60, 67), muted, foreground);
-  drawPageIndicator(active, rgb(66, 69, 88));
+  drawProviderEditorialPage(codex, false);
 }
 
 void drawClaudePage() {
-  const uint16_t background = rgb(15, 11, 9);
-  const uint16_t foreground = rgb(250, 249, 245);
-  const uint16_t muted = rgb(176, 174, 165);
-  const uint16_t track = rgb(54, 42, 37);
-  const uint16_t active = rgb(217, 119, 87);
-  const uint16_t metricLine = rgb(71, 52, 44);
+  if (kProviderRegressionSafeRenderer) {
+    drawRegressionSafeProviderPage(claude, true);
+    return;
+  }
+  drawProviderEditorialPage(claude, true);
+}
 
-  int mainPercent = dashboardRemainingPercent(claude.weekUsedPercent);
+void drawFeatureActionRow(const String &primaryLabel, const String &secondaryLabel,
+                          bool primaryEnabled, uint16_t accent,
+                          uint16_t background, uint16_t ink) {
+  uint16_t primaryFill = primaryEnabled ? ink : rgb(174, 171, 164);
+  uint16_t primaryText = primaryEnabled ? background : rgb(227, 223, 214);
+  fillAntialiasedCapsule(kFeaturePrimaryActionX, kFeatureActionY,
+                         kFeaturePrimaryActionWidth, kFeatureActionHeight,
+                         primaryFill);
+  canvas.fillCircle(kFeaturePrimaryActionX + 27,
+                    kFeatureActionY + kFeatureActionHeight / 2, 9, accent);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(primaryText);
+  useEditorialBold18();
+  canvas.drawString(primaryLabel, kFeaturePrimaryActionX + 101,
+                    kFeatureActionY + kFeatureActionHeight / 2 + 1);
 
-  drawRoundScreenBase(background, track, mainPercent, active);
+  drawAntialiasedCapsule(kFeatureSecondaryActionX, kFeatureActionY,
+                         kFeatureSecondaryActionWidth, kFeatureActionHeight,
+                         background, ink);
+  canvas.setTextColor(ink);
+  useEditorialMicro14();
+  canvas.drawString(secondaryLabel,
+                    kFeatureSecondaryActionX + kFeatureSecondaryActionWidth / 2,
+                    kFeatureActionY + kFeatureActionHeight / 2 + 1);
+}
+
+void drawVibrationIcon(int x, int y, uint16_t color) {
+  canvas.drawRoundRect(x - 7, y - 12, 14, 24, 4, color);
+  canvas.drawFastHLine(x - 3, y + 8, 6, color);
+  canvas.drawLine(x - 12, y - 7, x - 15, y - 3, color);
+  canvas.drawLine(x - 15, y + 3, x - 12, y + 7, color);
+  canvas.drawLine(x + 12, y - 7, x + 15, y - 3, color);
+  canvas.drawLine(x + 15, y + 3, x + 12, y + 7, color);
+}
+
+void drawAIHotspotBurst(M5Canvas &target, int frameOffset) {
+  constexpr int sourceSize = 220;
+  constexpr int outputSize = 360;
+  constexpr int outputX = 130;
+  constexpr int outputY = -35;
+  if (aiHotspotBurstCanvasReady) {
+    constexpr float zoom = static_cast<float>(outputSize) / sourceSize;
+    aiHotspotBurstCanvas.pushRotateZoomWithAA(
+        &target,
+        outputX + outputSize / 2 + frameOffset,
+        outputY + outputSize / 2 + frameOffset,
+        0.0f, zoom, zoom);
+    return;
+  }
+  target.drawPng(ai_hotspot_burst_png, ai_hotspot_burst_png_len,
+                 outputX + frameOffset, outputY + frameOffset,
+                 outputSize, outputSize, 0, 0, 1.0f, 1.0f,
+                 datum_t::top_left);
+}
+
+void drawAIHotspotPage() {
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t coral = rgb(255, 75, 67);
+  const uint16_t muted = rgb(98, 96, 91);
+  editorialFrameBurstActive = true;
+  canvas.fillScreen(background);
+  drawAIHotspotBurst(canvas, 0);
+  drawEditorialHeader("AI 热点", aiHotspot.active ? "尖叫" : "监听中", ink);
+
+  if (aiHotspot.active) {
+    canvas.setTextDatum(middle_left);
+    canvas.setTextColor(ink);
+    useChinese24();
+    canvas.setTextSize(1.2f);
+    String lines[2];
+    transcriptTextLines(aiHotspot.title.length() > 0 ? aiHotspot.title : "发现新的 AI 热点",
+                        330, lines);
+    canvas.drawString(lines[0], 58, 188);
+    if (lines[1].length() > 0) canvas.drawString(lines[1], 58, 228);
+    canvas.setTextSize(1);
+
+    canvas.setTextColor(muted);
+    useChinese16();
+    canvas.drawString((aiHotspot.source.length() > 0 ? aiHotspot.source : "AI") +
+                          " · 刚刚",
+                      60, 267);
+
+    canvas.fillCircle(95, 307, 22, ink);
+    drawSpeakerIcon(95, 307, background);
+    canvas.fillCircle(235, 307, 22, ink);
+    drawVibrationIcon(235, 307, background);
+    canvas.setTextColor(ink);
+    useEditorialMicro14();
+    canvas.drawString(notificationMuted ? "静音" : "声音", 121, 307);
+    canvas.drawString("震动", 261, 307);
+    drawFeatureActionRow("知道了", "打开", true, coral, background, ink);
+    return;
+  }
 
   canvas.setTextDatum(middle_center);
-  canvas.setTextColor(rgb(185, 173, 167));
+  canvas.setTextColor(ink);
+  useChinese24();
+  canvas.drawString("暂无新热点", 225, 226);
+  canvas.setTextColor(muted);
   useChinese16();
-  canvas.drawString("本周额度", 225, 48);
+  canvas.drawString(aiHotspot.connected ? "官方信息源正在监听" : "等待热点信息源",
+                    225, 268);
+  drawFeatureActionRow("继续监听", "打开", false, coral, background, ink);
+}
 
-  canvas.setTextColor(foreground);
-  useNumberFont();
-  canvas.drawString((mainPercent >= 0 ? String(mainPercent) + "%" : "--"), 225, 78);
-  drawBatteryStatus(background, muted);
+void drawObsidianDicePage() {
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t yellow = rgb(255, 196, 0);
+  const uint16_t muted = rgb(98, 96, 91);
+  bool hasSelection = obsidianDice.title.length() > 0;
+  drawEditorialBackdrop(yellow);
+  canvas.drawPng(obsidian_dice_png, obsidian_dice_png_len,
+                 252, 82, 150, 150, 0, 0, 1.0f, 1.0f, datum_t::top_left);
+  drawEditorialHeader("幸运笔记", hasSelection ? "摇骰结果" : "准备摇骰", ink);
 
-  drawMetric("活动任务", String(claude.active), 104, 136, 169, 78, 130,
-             muted, foreground, false, metricLine);
-  drawMetric("等待确认", String(claude.waiting), 346, 136, 169, 320, 372,
-             muted, foreground, false, metricLine);
-  drawMetric("今日用量", formatCount(claude.todayTokens), 112, 267, 301, 81, 143,
-             muted, foreground, false, metricLine);
-  drawMetric("累计", formatLifetimeUsage(claude.lifetimeTokens), 338, 267, 301, 312, 364,
-             muted, foreground, true, metricLine);
+  canvas.setTextDatum(middle_left);
+  canvas.setTextColor(ink);
+  // The native 80 px face includes both READY/LIVE and 0-9. Never scale the
+  // 104 px quota font here: fractional VLW scaling drops pixel rows on-device.
+  useEditorialHero80();
+  canvas.drawString(String(obsidianDice.availableCount), 55, 202);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  canvas.drawString("篇可抽", 58, 250);
 
-  drawClaudeIcon(background);
-  drawStatusPill(claudeStatusCN(), claudeStatusColor(), rgb(40, 31, 27), rgb(105, 64, 51),
-                 rgb(241, 234, 230));
-  drawFooterPill("周额重置", formatDurationCN(claude.weekResetInMin), rgb(33, 27, 24),
-                 rgb(75, 57, 49), muted, foreground);
-  drawPageIndicator(active, rgb(81, 68, 62));
+  canvas.setTextColor(ink);
+  useChinese24();
+  String lines[2];
+  transcriptTextLines(hasSelection ? obsidianDice.title : "摇一篇文档", 332, lines);
+  canvas.drawString(lines[0], 58, 280);
+  if (lines[1].length() > 0) canvas.drawString(lines[1], 58, 308);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  String folder = hasSelection ? obsidianDice.folder : "Smart Workspace · 抬腕摇一摇";
+  canvas.drawString(fitTextToWidth(folder, 320), 58, 331);
+  drawFeatureActionRow(hasSelection ? "打开文档" : "摇一摇", "再摇",
+                       obsidianDice.availableCount > 0, yellow, background, ink);
 }
 
 void drawConnectingPage() {
@@ -2716,86 +3495,390 @@ void startProvisioning() {
   }
 }
 
+String formatLocalStopwatchTime(uint64_t elapsedMs) {
+  uint64_t hundredths = (elapsedMs / 10) % 100;
+  uint64_t totalSeconds = elapsedMs / 1000;
+  uint64_t seconds = totalSeconds % 60;
+  uint64_t minutes = (totalSeconds / 60) % 60;
+  uint64_t hours = totalSeconds / 3600;
+  char buffer[28];
+  snprintf(buffer, sizeof(buffer), "%02llu:%02llu:%02llu.%02llu",
+           static_cast<unsigned long long>(hours),
+           static_cast<unsigned long long>(minutes),
+           static_cast<unsigned long long>(seconds),
+           static_cast<unsigned long long>(hundredths));
+  return String(buffer);
+}
+
+void drawLocalStopwatchTimeText(M5Canvas &target, int centerX, int baselineY) {
+  target.setTextDatum(baseline_center);
+  target.setTextColor(rgb(216, 242, 255));
+  if (stopwatchDigitFontReady) {
+    target.setFont(&stopwatchDigitFont);
+  } else {
+    target.setFont(&fonts::DejaVu56);
+  }
+  target.setTextSize(1);
+  target.drawString(
+      formatLocalStopwatchTime(localStopwatchElapsedMs(localStopwatch, millis())),
+      centerX, baselineY);
+}
+
+void drawLocalStopwatchTimeOnly() {
+  if (!stopwatchTimeCanvasReady) {
+    drawCurrentPage();
+    return;
+  }
+  stopwatchTimeCanvas.fillSprite(rgb(65, 72, 75));
+  drawLocalStopwatchTimeText(stopwatchTimeCanvas, kStopwatchTimeWidth / 2,
+                             kStopwatchTimeBaselineY - kStopwatchTimeY);
+  int frameOffset = designFrameOffset();
+  M5.Display.startWrite();
+  stopwatchTimeCanvas.pushSprite(displayFrameOffsetX() + frameOffset + kStopwatchTimeX,
+                                 displayFrameOffsetY() + frameOffset + kStopwatchTimeY);
+  M5.Display.endWrite();
+}
+
+void drawLauncherIcon(bool dashboardIcon, int centerX, int centerY,
+                      uint16_t color, uint16_t surface) {
+  if (dashboardIcon) {
+    constexpr int size = 23;
+    constexpr int gap = 10;
+    for (int row = 0; row < 2; ++row) {
+      for (int column = 0; column < 2; ++column) {
+        int x = centerX + (column == 0 ? -size - gap / 2 : gap / 2);
+        int y = centerY + (row == 0 ? -size - gap / 2 : gap / 2);
+        canvas.fillRoundRect(x, y, size, size, 7, color);
+      }
+    }
+    return;
+  }
+  canvas.drawCircle(centerX, centerY, 34, color);
+  canvas.drawCircle(centerX, centerY, 33, color);
+  canvas.drawLine(centerX, centerY, centerX, centerY - 20, color);
+  canvas.drawLine(centerX, centerY, centerX + 17, centerY + 10, color);
+  canvas.fillCircle(centerX, centerY, 4, surface);
+  canvas.fillCircle(centerX, centerY, 2, color);
+}
+
+void drawAppLauncherPage() {
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t coral = rgb(255, 59, 48);
+  const uint16_t yellow = rgb(255, 196, 0);
+  const uint16_t muted = rgb(106, 105, 101);
+  canvas.fillScreen(background);
+  canvas.fillCircle(366, 84, 126, coral);
+
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(ink);
+  useChinese24();
+  canvas.drawString("选择程序", 225, 78);
+
+  constexpr int centers[] = {137, 313};
+  for (int index = 0; index < 2; ++index) {
+    bool selected = launcherSelection == index;
+    uint16_t surface = selected ? ink : background;
+    uint16_t accent = index == 0 ? coral : yellow;
+    canvas.fillCircle(centers[index], 222, 74, surface);
+    canvas.drawCircle(centers[index], 222, 74, accent);
+    canvas.drawCircle(centers[index], 222, 72, accent);
+    if (selected) canvas.drawCircle(centers[index], 222, 78, ink);
+    drawLauncherIcon(index == 0, centers[index], 212,
+                     selected ? background : ink, surface);
+
+    canvas.fillCircle(centers[index] - 45, 166, 14, accent);
+    canvas.setTextColor(ink);
+    useNumberFont();
+    canvas.setTextSize(0.82f);
+    canvas.drawString(index == 0 ? "A" : "B", centers[index] - 45, 166);
+    canvas.setTextSize(1);
+
+    canvas.setTextColor(selected ? background : ink);
+    canvas.setTextSize(0.82f);
+    canvas.drawString(index == 0 ? "DASHBOARD" : "STOPWATCH",
+                      centers[index], 278);
+    canvas.setTextSize(1);
+  }
+
+  canvas.setTextColor(muted);
+  useChinese16();
+  canvas.setTextSize(0.86f);
+  canvas.drawString("A / B 选择 · 轻触进入", 225, 374);
+  canvas.setTextSize(1);
+}
+
+void drawLocalStopwatchPage() {
+  const uint16_t background = rgb(0, 0, 0);
+  const uint16_t panel = rgb(65, 72, 75);
+  const uint16_t divider = rgb(88, 100, 106);
+  const uint16_t elapsedColor = rgb(216, 242, 255);
+  const uint16_t leftColor = rgb(179, 205, 255);
+  const uint16_t rightColor = localStopwatch.state == LocalStopwatchState::running
+                                  ? rgb(255, 158, 171)
+                                  : rgb(156, 241, 182);
+  const uint16_t buttonInk = rgb(20, 24, 27);
+  const uint16_t muted = rgb(115, 128, 134);
+  canvas.fillScreen(background);
+
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(rgb(205, 235, 249));
+  canvas.setFont(&fonts::FreeSansBold12pt7b);
+  canvas.setTextSize(1);
+  canvas.drawString("STOPWATCH", 225, 24);
+
+  canvas.fillSmoothRoundRect(98, 54, 105, 72, 34, leftColor);
+  canvas.fillSmoothRoundRect(247, 54, 105, 72, 34, rightColor);
+  canvas.setTextColor(buttonInk);
+  canvas.setFont(&fonts::FreeSansBold12pt7b);
+  canvas.setTextSize(1);
+  canvas.drawString(localStopwatchLeftLabel(localStopwatch.state), 150, 90);
+  canvas.drawString(localStopwatchRightLabel(localStopwatch.state), 299, 90);
+
+  canvas.fillSmoothRoundRect(0, 148, 450, 302, 58, panel);
+  drawLocalStopwatchTimeText(canvas, 225, kStopwatchTimeBaselineY);
+  canvas.fillSmoothRoundRect(145, 246, 160, 4, 2, divider);
+
+  if (localStopwatch.lapCount == 0) {
+    canvas.setTextColor(muted);
+    canvas.setFont(&fonts::DejaVu24);
+    canvas.setTextSize(1);
+    canvas.drawString("-.-", 225, 310);
+  } else {
+    std::size_t visible = localStopwatch.lapCount > kLocalStopwatchVisibleLaps
+                              ? kLocalStopwatchVisibleLaps
+                              : localStopwatch.lapCount;
+    std::size_t maximumOffset =
+        localStopwatchMaximumLapOffset(localStopwatch.lapCount);
+    if (localStopwatchLapOffset > maximumOffset) {
+      localStopwatchLapOffset = maximumOffset;
+    }
+    std::size_t first = localStopwatchFirstVisibleLap(
+        localStopwatch.lapCount, localStopwatchLapOffset);
+    for (std::size_t row = 0; row < visible; ++row) {
+      std::size_t lapIndex = first + row;
+      int y = 280 + static_cast<int>(row) * 42;
+      canvas.setTextColor(elapsedColor);
+      canvas.setFont(&fonts::DejaVu18);
+      canvas.setTextSize(1);
+      canvas.setTextDatum(middle_left);
+      canvas.drawString("LAP " + String(static_cast<unsigned int>(lapIndex + 1)), 68, y);
+      canvas.setTextDatum(middle_right);
+      canvas.drawString(formatLocalStopwatchTime(localStopwatch.laps[lapIndex]), 382, y);
+    }
+  }
+
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(rgb(171, 181, 186));
+  useChinese16();
+  // Keep the VLW bitmap at native scale. Fractional downscaling drops source
+  // pixel rows in M5GFX and visibly trims the footer's lower strokes.
+  canvas.setTextSize(1);
+  String footer = "双击电源键返回";
+  std::size_t maximumLapOffset =
+      localStopwatchMaximumLapOffset(localStopwatch.lapCount);
+  if (maximumLapOffset > 0) {
+    footer = localStopwatchLapOffset == 0
+                 ? "上滑回看 · 双击电源键"
+                 : localStopwatchLapOffset >= maximumLapOffset
+                       ? "下滑返回最新 · 双击电源键"
+                       : "上下滑浏览 · 双击电源键";
+  }
+  canvas.drawString(footer, 225, kStopwatchFooterY);
+}
+
 void renderCurrentPage() {
+  editorialFrameAccentActive = false;
+  editorialFrameBurstActive = false;
+  if (appMode == DashboardAppMode::launcher) {
+    drawAppLauncherPage();
+    composeRenderedFrame(currentRenderedBackground());
+    return;
+  }
+  if (appMode == DashboardAppMode::stopwatch) {
+    drawLocalStopwatchPage();
+    composeRenderedFrame(currentRenderedBackground());
+    return;
+  }
+  markRenderDiagnostic(120, currentPage);
   if (!haveData) {
     drawConnectingPage();
   } else if (currentPage == 0) {
     drawClockPage();
   } else if (currentPage == 1) {
-    drawPrinterPage();
+    drawFocusPage();
   } else if (currentPage == 2) {
     drawCodexPage();
-  } else {
+  } else if (currentPage == 3) {
     drawClaudePage();
+  } else if (currentPage == 4) {
+    drawVoiceOverlay();
+  } else if (currentPage == 5) {
+    drawAIHotspotPage();
+  } else {
+    drawObsidianDicePage();
   }
   drawOverlay();
   drawCompletionOverlay(millis());
+  markRenderDiagnostic(180, currentPage);
   composeRenderedFrame(currentRenderedBackground());
+  markRenderDiagnostic(190, currentPage);
 }
 
 void drawCurrentPage() {
   renderCurrentPage();
   pushRenderedFrame(currentRenderedBackground());
+  markRenderDiagnostic(0);
+}
+
+void resetDashboardInputState() {
+  aButtonTracking = false;
+  aButtonConsumed = false;
+  aButtonLongTriggered = false;
+  aButtonPressedAt = 0;
+  bButtonTracking = false;
+  bButtonConsumed = false;
+  bButtonLongTriggered = false;
+  bButtonPressedAt = 0;
+  aClickState = DashboardClickButtonState();
+  bClickState = DashboardClickButtonState();
+  configChordActive = false;
+  touchPending = false;
+  activeGesture = DashboardGesture::none;
+}
+
+void enterAppLauncher() {
+  if (configMode) return;
+  if (voiceSessionActive || voiceCaptureActive) stopVoiceForStandby();
+  appMode = DashboardAppMode::launcher;
+  overlayMode = OverlayMode::none;
+  completionAnimationRunning = false;
+  completionBaselineReady = false;
+  resetDashboardInputState();
+  requireHighPerformance();
+  drawCurrentPage();
+}
+
+void enterDashboardApp() {
+  appMode = DashboardAppMode::dashboard;
+  currentPage = 0;
+  overlayMode = OverlayMode::none;
+  resetDashboardInputState();
+  requireHighPerformance();
+  drawCurrentPage();
+}
+
+void enterLocalStopwatchApp() {
+  appMode = DashboardAppMode::stopwatch;
+  overlayMode = OverlayMode::none;
+  localStopwatchLapOffset = 0;
+  resetDashboardInputState();
+  lastLocalStopwatchDrawAt = 0;
+  requireHighPerformance();
+  drawCurrentPage();
+}
+
+void updateAppShellButtons() {
+  bool aPressed = M5.BtnA.wasPressed();
+  bool bPressed = readBButtonPressed();
+  bool bStarted = bPressed && !shellBButtonWasPressed;
+  shellBButtonWasPressed = bPressed;
+
+  if (appMode == DashboardAppMode::launcher) {
+    if (aPressed) {
+      launcherSelection = 0;
+      startVibration(65, 30);
+      drawCurrentPage();
+    } else if (bStarted) {
+      launcherSelection = 1;
+      startVibration(65, 30);
+      drawCurrentPage();
+    }
+    return;
+  }
+
+  if (appMode != DashboardAppMode::stopwatch) return;
+  if (aPressed) {
+    std::size_t previousLapCount = localStopwatch.lapCount;
+    localStopwatchLeftAction(localStopwatch, millis());
+    if (localStopwatch.lapCount != previousLapCount) localStopwatchLapOffset = 0;
+    startVibration(75, 32);
+    drawCurrentPage();
+  } else if (bStarted) {
+    localStopwatchRightAction(localStopwatch, millis());
+    startVibration(75, 32);
+    drawCurrentPage();
+  }
+}
+
+void updateAppShellTouch(const m5::touch_detail_t &touch) {
+  if (!touch.wasReleased()) return;
+  int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
+  int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
+
+  if (appMode == DashboardAppMode::stopwatch &&
+      localStopwatchLapRegionContains(designX, designY) &&
+      abs(touch.distanceY()) >= 45 &&
+      abs(touch.distanceY()) > abs(touch.distanceX())) {
+    // A finger moving upward has a negative distanceY and reveals older laps.
+    int pageDirection = touch.distanceY() < 0 ? 1 : -1;
+    std::size_t previousOffset = localStopwatchLapOffset;
+    localStopwatchLapOffset = localStopwatchLapPageOffset(
+        localStopwatchLapOffset, pageDirection, localStopwatch.lapCount);
+    bool moved = localStopwatchLapOffset != previousOffset;
+    startVibration(moved ? 48 : 28, moved ? 26 : 18);
+    drawCurrentPage();
+    return;
+  }
+
+  if (abs(touch.distanceX()) >= kGestureLockThreshold ||
+      abs(touch.distanceY()) >= kGestureLockThreshold) {
+    return;
+  }
+
+  if (appMode == DashboardAppMode::launcher) {
+    AppShellTouchTarget target = appLauncherTouchTarget(designX, designY);
+    if (target == AppShellTouchTarget::dashboard) {
+      launcherSelection = 0;
+      startVibration(85, 36);
+      enterDashboardApp();
+    } else if (target == AppShellTouchTarget::stopwatch) {
+      launcherSelection = 1;
+      startVibration(85, 36);
+      enterLocalStopwatchApp();
+    }
+    return;
+  }
+
+  if (appMode != DashboardAppMode::stopwatch) return;
+  AppShellTouchTarget target = localStopwatchTouchTarget(designX, designY);
+  if (target == AppShellTouchTarget::leftAction) {
+    std::size_t previousLapCount = localStopwatch.lapCount;
+    localStopwatchLeftAction(localStopwatch, millis());
+    if (localStopwatch.lapCount != previousLapCount) localStopwatchLapOffset = 0;
+    startVibration(75, 32);
+    drawCurrentPage();
+  } else if (target == AppShellTouchTarget::rightAction) {
+    localStopwatchRightAction(localStopwatch, millis());
+    startVibration(75, 32);
+    drawCurrentPage();
+  }
 }
 
 void updateCenterIconAnimation() {
-  if (!iconCanvasReady || !haveData || configMode || screenLocked ||
-      completionAnimationRunning || overlayMode != OverlayMode::none ||
-      activeGesture != DashboardGesture::none) {
-    return;
-  }
-
-  uint32_t now = millis();
-  if (static_cast<uint32_t>(now - lastIconAnimationAt) < kIconAnimationRefreshMs) return;
-  lastIconAnimationAt = now;
-
-  if (currentPage == 2) {
-    DashboardCodexIconMode mode = currentCodexIconMode(now);
-    size_t frame = currentCodexIconFrame(mode, now);
-    int modeValue = static_cast<int>(mode);
-    if (lastAnimatedIconPage == currentPage && lastAnimatedIconMode == modeValue &&
-        lastAnimatedIconFrame == frame) {
-      return;
-    }
-    if (mode != DashboardCodexIconMode::idle) requireHighPerformance();
-    composeCodexIcon(rgb(7, 8, 17), now);
-    copyIconCanvasToPage(true);
-    lastAnimatedIconPage = currentPage;
-    lastAnimatedIconMode = modeValue;
-    lastAnimatedIconFrame = frame;
-    return;
-  }
-
-  if (currentPage == 3) {
-    uint8_t scale = currentClaudeScalePercent(now);
-    int modeValue = claude.connected && claude.active > 0 ? 1 : 0;
-    if (lastAnimatedIconPage == currentPage && lastAnimatedIconMode == modeValue &&
-        lastAnimatedIconFrame == scale) {
-      return;
-    }
-    if (modeValue != 0) requireHighPerformance();
-    composeClaudeIcon(rgb(15, 11, 9), now);
-    copyIconCanvasToPage(true);
-    lastAnimatedIconPage = currentPage;
-    lastAnimatedIconMode = modeValue;
-    lastAnimatedIconFrame = scale;
-  }
+  // ESP_RST_PANIC with a completed page-render stage isolated the fault to
+  // this former post-render path. Provider icons are intentionally static:
+  // the full page compositor now remains the sole owner of frame/display I/O.
 }
 
-void notifyTransitions(const PrinterData &oldPrinter, const CodexData &oldCodex, bool hadData,
+void notifyTransitions(const TickTickData &oldTickTick, const CodexData &oldCodex, bool hadData,
                        bool completionStarted) {
   if (!hadData) return;
-  if (oldPrinter.state != printer.state &&
-      (printer.state == "FINISHED" || printer.state == "ERROR")) {
-    startVibration(printer.state == "ERROR" ? 230 : 170,
-                   printer.state == "ERROR" ? 500 : 220);
-    if (printer.state == "ERROR") {
-      startTonePattern(kPrinterErrorTones,
-                       sizeof(kPrinterErrorTones) / sizeof(kPrinterErrorTones[0]));
-    } else {
-      startTonePattern(kPrinterDoneTones,
-                       sizeof(kPrinterDoneTones) / sizeof(kPrinterDoneTones[0]));
-    }
+  if (timerRunning(oldTickTick.countdownState) &&
+      !timerRunning(ticktick.countdownState) && ticktick.countdownRemaining == 0) {
+    startVibration(170, 220);
+    startTonePattern(kFocusDoneTones,
+                     sizeof(kFocusDoneTones) / sizeof(kFocusDoneTones[0]));
   } else if (codex.waiting > oldCodex.waiting) {
     // A task can complete and immediately enter the next waiting turn in the
     // same state update. Do not make that task-complete update vibrate.
@@ -2825,6 +3908,7 @@ void applyTranscriptState(JsonObject source, TranscriptCollection &destination) 
     task.id = String(static_cast<const char *>(taskSource["id"] | ""));
     task.title = String(static_cast<const char *>(taskSource["title"] | "当前任务"));
     task.status = String(static_cast<const char *>(taskSource["status"] | "working"));
+    task.contentVisible = taskSource["content_visible"] | false;
     JsonArray messages = taskSource["messages"].as<JsonArray>();
     if (messages.isNull()) continue;
     for (JsonObject messageSource : messages) {
@@ -2907,25 +3991,26 @@ bool updateCompletionResults() {
 }
 
 bool applyDashboardState(JsonDocument &doc) {
-  PrinterData oldPrinter = printer;
+  TickTickData oldTickTick = ticktick;
   CodexData oldCodex = codex;
+  AIHotspotData oldAiHotspot = aiHotspot;
   bool hadData = haveData;
   if (hadData && lastStateAppliedAt != 0 &&
       static_cast<uint32_t>(millis() - lastStateAppliedAt) > kCompletionStateGapMs) {
     completionBaselineReady = false;
   }
 
-  JsonObject p = doc["printer"];
-  printer.connected = p["connected"] | false;
-  printer.progress = p["progress"] | 0;
-  printer.remainingMin = p["remaining_min"] | 0;
-  printer.nozzle = p["nozzle_temp"] | 0.0f;
-  printer.bed = p["bed_temp"] | 0.0f;
-  printer.chamber = p["chamber_temp"] | 0.0f;
-  printer.layer = p["layer"] | 0;
-  printer.totalLayers = p["total_layers"] | 0;
-  printer.state = String(static_cast<const char *>(p["state_label"] | "UNKNOWN"));
-  printer.file = String(static_cast<const char *>(p["file"] | ""));
+  JsonObject t = doc["ticktick"];
+  ticktick.connected = t["connected"] | false;
+  JsonObject stopwatch = t["stopwatch"];
+  ticktick.stopwatchState = String(static_cast<const char *>(stopwatch["state"] | "idle"));
+  ticktick.stopwatchElapsed = stopwatch["elapsed_seconds"] | 0;
+  JsonObject countdown = t["countdown"];
+  ticktick.countdownState = String(static_cast<const char *>(countdown["state"] | "idle"));
+  ticktick.countdownDuration = countdown["duration_seconds"] | 1500;
+  ticktick.countdownRemaining = countdown["remaining_seconds"] | ticktick.countdownDuration;
+  ticktick.error = String(static_cast<const char *>(t["error"] | ""));
+  ticktick.syncedAt = millis();
 
   JsonObject c = doc["codex"];
   codex.connected = c["connected"] | false;
@@ -2995,6 +4080,13 @@ bool applyDashboardState(JsonDocument &doc) {
   claude.firstStatus = "";
   applyTranscriptState(a, claudeTranscripts);
 
+  JsonObject u = doc["ai_usage"];
+  aiUsage.connected = u["connected"] | false;
+  aiUsage.complete = u["complete"] | false;
+  aiUsage.approximate = u["approximate"] | false;
+  aiUsage.todayTotalTokens = u["today_total_tokens"] | 0LL;
+  aiUsage.todayAuthoritativeTokens = u["today_authoritative_tokens"] | 0LL;
+
   dashboardResults = DashboardResultCollection();
   appendDashboardResults(c, 'C');
   appendDashboardResults(a, 'A');
@@ -3009,6 +4101,28 @@ bool applyDashboardState(JsonDocument &doc) {
   weather.label = String(static_cast<const char *>(w["label"] | ""));
   weather.updatedAt = w["updated_at"] | 0LL;
 
+  JsonObject hotspot = doc["ai_hotspot"];
+  aiHotspot.connected = hotspot["connected"] | false;
+  aiHotspot.active = hotspot["active"] | false;
+  aiHotspot.unreadCount = hotspot["unread_count"] | 0;
+  JsonObject alert = hotspot["alert"];
+  aiHotspot.id = String(static_cast<const char *>(alert["id"] | ""));
+  aiHotspot.title = String(static_cast<const char *>(alert["title"] | ""));
+  aiHotspot.source = String(static_cast<const char *>(alert["source"] | ""));
+  aiHotspot.url = String(static_cast<const char *>(alert["url"] | ""));
+  aiHotspot.receivedAt = alert["received_at"] | 0LL;
+
+  JsonObject obsidian = doc["obsidian"];
+  obsidianDice.connected = obsidian["connected"] | false;
+  obsidianDice.availableCount = obsidian["available_count"] | 0;
+  JsonObject selectedNote = obsidian["selected"];
+  obsidianDice.title = String(static_cast<const char *>(selectedNote["title"] | ""));
+  obsidianDice.folder = String(static_cast<const char *>(selectedNote["folder"] | ""));
+  obsidianDice.excerpt = String(static_cast<const char *>(selectedNote["excerpt"] | ""));
+  obsidianDice.relativePath =
+      String(static_cast<const char *>(selectedNote["relative_path"] | ""));
+  obsidianDice.rolledAt = obsidian["rolled_at"] | 0LL;
+
   if (hadData && oldCodex.active > 0 && codex.active == 0 && codex.connected &&
       codex.waiting == 0 && codex.errors == 0) {
     codexDoneAnimationUntilAt = millis() + kCodexDoneAnimationMs;
@@ -3016,7 +4130,21 @@ bool applyDashboardState(JsonDocument &doc) {
 
   haveData = true;
   lastStateAppliedAt = millis();
-  notifyTransitions(oldPrinter, oldCodex, hadData, completionStarted);
+  notifyTransitions(oldTickTick, oldCodex, hadData, completionStarted);
+  bool newAiHotspot = aiHotspot.active &&
+                      (!oldAiHotspot.active || aiHotspot.id != oldAiHotspot.id);
+  if (newAiHotspot && (screenLocked || appMode == DashboardAppMode::dashboard)) {
+    requireHighPerformance();
+    startVibration(220, 650);
+    startTonePattern(kAiScreamTones,
+                     sizeof(kAiScreamTones) / sizeof(kAiScreamTones[0]));
+    if (screenLocked) {
+      pendingAiHotspotWake = true;
+    } else {
+      currentPage = 5;
+      overlayMode = OverlayMode::none;
+    }
+  }
   return true;
 }
 
@@ -3071,8 +4199,132 @@ bool fetchState() {
   return applyDashboardState(doc);
 }
 
-void sendUsbStateRequest() {
+void sendUsbDashboardAction(const String &action) {
   String tokens[2] = {settings.token, settings.token2};
+  int tokenSlot = activeUsbTokenSlot >= 0 ? activeUsbTokenSlot : 0;
+  if (tokens[tokenSlot].length() == 0) tokenSlot = 1 - tokenSlot;
+  if (tokens[tokenSlot].length() == 0) return;
+  pendingUsbTokenSlot = tokenSlot;
+  dashboardBridgeSerial.print(kUsbActionPrefix);
+  dashboardBridgeSerial.print(tokens[tokenSlot]);
+  dashboardBridgeSerial.print('|');
+  dashboardBridgeSerial.println(action);
+  lastUsbRequestAt = millis();
+}
+
+bool sendHttpDashboardAction(const String &path) {
+  if (WiFi.status() != WL_CONNECTED || activeBridgeHost.length() == 0 ||
+      activeBridgePort == 0) {
+    return false;
+  }
+  String url = "http://" + activeBridgeHost + ":" + String(activeBridgePort) + path;
+  String tokens[2] = {settings.token, settings.token2};
+  int tokenOrder[2] = {activeTokenSlot == 1 ? 1 : 0, activeTokenSlot == 1 ? 0 : 1};
+  for (int orderIndex = 0; orderIndex < 2; ++orderIndex) {
+    int tokenIndex = tokenOrder[orderIndex];
+    if (tokens[tokenIndex].length() == 0) continue;
+    HTTPClient http;
+    http.setTimeout(3000);
+    if (!http.begin(url)) return false;
+    http.addHeader("X-Dashboard-Token", tokens[tokenIndex]);
+    http.addHeader("Content-Type", "application/json");
+    int statusCode = http.POST("{}");
+    if (statusCode == HTTP_CODE_OK) {
+      JsonDocument doc;
+      DeserializationError parseError = deserializeJson(doc, http.getStream());
+      http.end();
+      if (parseError) return false;
+      activeTokenSlot = tokenIndex;
+      bridgeOnline = true;
+      return applyDashboardState(doc);
+    }
+    http.end();
+    if (statusCode != HTTP_CODE_UNAUTHORIZED && statusCode != HTTP_CODE_FORBIDDEN) break;
+  }
+  return false;
+}
+
+bool sendHttpTickTickAction(const String &action) {
+  return sendHttpDashboardAction("/api/ticktick/" + action);
+}
+
+void performTickTickAction(const String &action) {
+  requireHighPerformance();
+  currentPage = 1;
+  overlayMode = OverlayMode::none;
+  startVibration(action.endsWith("end") ? 90 : 55, action.endsWith("end") ? 55 : 28);
+  if (usbBridgeOnline) {
+    sendUsbDashboardAction(action);
+  } else {
+    sendHttpTickTickAction(action);
+  }
+  drawCurrentPage();
+}
+
+void performAIHotspotAction(const String &action) {
+  requireHighPerformance();
+  currentPage = 5;
+  overlayMode = OverlayMode::none;
+  stopTonePattern();
+  startVibration(action == "open" ? 80 : 60, action == "open" ? 55 : 35);
+  String wireAction = action == "open" ? "ai-open" : "ai-ack";
+  if (usbBridgeOnline) {
+    sendUsbDashboardAction(wireAction);
+  } else {
+    sendHttpDashboardAction(action == "open" ? "/api/ai/open" : "/api/ai/ack");
+  }
+  drawCurrentPage();
+}
+
+void performObsidianAction(const String &action) {
+  requireHighPerformance();
+  currentPage = 6;
+  overlayMode = OverlayMode::none;
+  startVibration(action == "roll" ? 125 : 70, action == "roll" ? 90 : 40);
+  String wireAction = action == "open" ? "obsidian-open" : "obsidian-roll";
+  if (usbBridgeOnline) {
+    sendUsbDashboardAction(wireAction);
+  } else {
+    sendHttpDashboardAction(action == "open" ? "/api/obsidian/open"
+                                               : "/api/obsidian/roll");
+  }
+  drawCurrentPage();
+}
+
+void performTypelessAction(const String &action) {
+  String wireAction = action == "start" ? "typeless-start" : "typeless-stop";
+  if (usbBridgeOnline) {
+    sendUsbDashboardAction(wireAction);
+  } else {
+    sendHttpDashboardAction(action == "start" ? "/api/typeless/start"
+                                                : "/api/typeless/stop");
+  }
+}
+
+void sendUsbStateRequest() {
+  if (!bootDiagnosticAcknowledged) {
+    dashboardBridgeSerial.print(kUsbDiagnosticPrefix);
+    dashboardBridgeSerial.print(bootResetReason);
+    dashboardBridgeSerial.print('|');
+    dashboardBridgeSerial.print(previousRenderDiagnosticStage);
+    dashboardBridgeSerial.print('|');
+    dashboardBridgeSerial.println(previousRenderDiagnosticPage);
+  }
+  String tokens[2] = {settings.token, settings.token2};
+  int configuredTokenCount = (tokens[0].length() > 0 ? 1 : 0) +
+                             (tokens[1].length() > 0 ? 1 : 0);
+  bool hasEmptyTokenSlot = configuredTokenCount < 2;
+  if (configuredTokenCount == 0 ||
+      (hasEmptyTokenSlot && usbUnauthorizedCount >= configuredTokenCount)) {
+    uint64_t chipId = ESP.getEfuseMac();
+    char deviceId[24];
+    snprintf(deviceId, sizeof(deviceId), "M5-%012llX",
+             static_cast<unsigned long long>(chipId));
+    dashboardBridgeSerial.print(kUsbPairRequestPrefix);
+    dashboardBridgeSerial.println(deviceId);
+    lastUsbRequestAt = millis();
+    return;
+  }
   int tokenSlot = activeUsbTokenSlot;
   if (tokenSlot < 0) {
     tokenSlot = pendingUsbTokenSlot == 1 ? 0 : 1;
@@ -3086,8 +4338,30 @@ void sendUsbStateRequest() {
 }
 
 void handleUsbResponse(const String &line) {
+  if (line.startsWith(kUsbPairResponsePrefix)) {
+    String pairedToken = line.substring(strlen(kUsbPairResponsePrefix));
+    if (!dashboardUsbPairingTokenValid(pairedToken.c_str(), pairedToken.length())) return;
+    int pairedSlot = pairedToken == settings.token ? 0
+                     : pairedToken == settings.token2 ? 1
+                     : settings.token.length() == 0 ? 0
+                     : settings.token2.length() == 0 ? 1
+                     : -1;
+    if (pairedSlot < 0) return;
+    DashboardSettings pairedSettings = settings;
+    if (pairedSlot == 0) pairedSettings.token = pairedToken;
+    if (pairedSlot == 1) pairedSettings.token2 = pairedToken;
+    if (!saveDashboardSettings(pairedSettings)) return;
+    settings = pairedSettings;
+    activeUsbTokenSlot = pairedSlot;
+    pendingUsbTokenSlot = pairedSlot;
+    usbUnauthorizedCount = 0;
+    lastUsbRequestAt = 0;
+    startVibration(80, 35);
+    return;
+  }
   if (line.startsWith(kUsbErrorPrefix)) {
     activeUsbTokenSlot = -1;
+    if (usbUnauthorizedCount < 2) ++usbUnauthorizedCount;
     lastUsbRequestAt = 0;
     return;
   }
@@ -3095,7 +4369,9 @@ void handleUsbResponse(const String &line) {
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, line.substring(strlen(kUsbResponsePrefix)));
   if (error || !applyDashboardState(doc)) return;
+  bootDiagnosticAcknowledged = true;
   activeUsbTokenSlot = pendingUsbTokenSlot;
+  usbUnauthorizedCount = 0;
   usbBridgeOnline = true;
   lastUsbStateAt = millis();
 }
@@ -3245,7 +4521,8 @@ void connectWifi() {
   bool homeConfigured = settings.ssid.length() > 0;
   bool workConfigured = settings.ssid2.length() > 0;
   if (!homeConfigured && !workConfigured) {
-    startProvisioning();
+    // USB-first is a complete operating mode. Wi-Fi is optional and only
+    // enters provisioning after Alice deliberately holds A+B.
     return;
   }
   if (wifiSearchStartedAt == 0) wifiSearchStartedAt = millis();
@@ -3351,7 +4628,9 @@ bool requestWifiProfile(int profile) {
 void changePage(int delta) {
   int nextPage = (currentPage + delta + pageCount) % pageCount;
   if (nextPage == currentPage) return;
+  markRenderDiagnostic(100, nextPage);
   requireHighPerformance();
+  obsidianShakePreviousReady = false;
 
   if (!frameCanvasReady || !transitionCanvasReady || frameCanvas.getBuffer() == nullptr ||
       transitionCanvas.getBuffer() == nullptr) {
@@ -3364,9 +4643,11 @@ void changePage(int delta) {
 
   size_t pixelBytes = static_cast<size_t>(kUiFrameSize) * kUiFrameSize * 2;
   memcpy(transitionCanvas.getBuffer(), frameCanvas.getBuffer(), pixelBytes);
+  markRenderDiagnostic(110, nextPage);
   currentPage = nextPage;
   overlayMode = OverlayMode::none;
   renderCurrentPage();
+  markRenderDiagnostic(130, nextPage);
 
   constexpr int frameCount = 10;
   constexpr int frameDurationMs = 14;
@@ -3375,6 +4656,7 @@ void changePage(int delta) {
   int displayOffsetY = displayFrameOffsetY();
   int direction = delta > 0 ? 1 : -1;
   for (int frame = 1; frame <= frameCount; ++frame) {
+    markRenderDiagnostic(static_cast<uint16_t>(140 + frame), nextPage);
     int numerator = frame * frame * (3 * frameCount - 2 * frame);
     int offset = displayWidth * numerator / (frameCount * frameCount * frameCount);
     M5.Display.startWrite();
@@ -3389,7 +4671,20 @@ void changePage(int delta) {
     M5.Display.endWrite();
     delay(frameDurationMs);
   }
+  markRenderDiagnostic(160, nextPage);
   pushRenderedFrame(currentRenderedBackground());
+  startVibration(65, 30);
+  markRenderDiagnostic(0);
+}
+
+void returnToClockPage() {
+  int delta = dashboardHomePageDelta(currentPage);
+  if (delta != 0) {
+    changePage(delta);
+    return;
+  }
+  overlayMode = OverlayMode::none;
+  drawCurrentPage();
   startVibration(65, 30);
 }
 
@@ -3433,6 +4728,9 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
   if (finishedGesture == DashboardGesture::page &&
       abs(touch.distanceX()) >= kSwipeThreshold) {
     changePage(touch.distanceX() < 0 ? 1 : -1);
+    // If this marker is never observed after a PANIC, the failure is detected
+    // while returning from changePage rather than in the following loop work.
+    markProviderLoopDiagnostic(501);
   } else if (finishedGesture == DashboardGesture::brightness ||
              finishedGesture == DashboardGesture::volume) {
     overlayUntilAt = millis() + kControlOverlayMs;
@@ -3447,8 +4745,22 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
              abs(touch.distanceY()) < kGestureLockThreshold) {
     int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
     int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
-    if (currentPage == 0 && designY >= 326 && designY <= 390) {
-      if (designX >= 89 && designX < 225) {
+    if (currentPage == 1) {
+      DashboardFocusTouchTarget target = dashboardFocusTouchTarget(designX, designY);
+      if (target != DashboardFocusTouchTarget::none) {
+        bool stopwatchMode = focusUsesStopwatchMode();
+        String action = target == DashboardFocusTouchTarget::primary
+                            ? stopwatchMode ? "stopwatch-click" : "countdown-click"
+                            : stopwatchMode ? "stopwatch-end" : "countdown-end";
+        activeGesture = DashboardGesture::none;
+        touchPending = false;
+        performTickTickAction(action);
+        return;
+      }
+    }
+    if (currentPage == 0) {
+      DashboardClockTouchTarget target = dashboardClockTouchTarget(designX, designY);
+      if (target == DashboardClockTouchTarget::orbit) {
         overlayMode = OverlayMode::orbit;
         startVibration(55, 28);
         drawCurrentPage();
@@ -3456,7 +4768,7 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
         touchPending = false;
         return;
       }
-      if (designX >= 225 && designX <= 361) {
+      if (target == DashboardClockTouchTarget::results) {
         selectedResult = -1;
         overlayMode = OverlayMode::results;
         startVibration(55, 28);
@@ -3466,11 +4778,43 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
         return;
       }
     }
+    if (currentPage == 5) {
+      DashboardFeatureTouchTarget target =
+          dashboardFeatureTouchTarget(designX, designY, false);
+      if (aiHotspot.active && target != DashboardFeatureTouchTarget::none) {
+        activeGesture = DashboardGesture::none;
+        touchPending = false;
+        performAIHotspotAction(target == DashboardFeatureTouchTarget::secondary
+                                   ? "open"
+                                   : "ack");
+        return;
+      }
+    }
+    if (currentPage == 6) {
+      DashboardFeatureTouchTarget target =
+          dashboardFeatureTouchTarget(designX, designY, true);
+      if (target != DashboardFeatureTouchTarget::none &&
+          obsidianDice.availableCount > 0) {
+        activeGesture = DashboardGesture::none;
+        touchPending = false;
+        bool openSelected = target == DashboardFeatureTouchTarget::primary &&
+                            obsidianDice.title.length() > 0;
+        performObsidianAction(openSelected ? "open" : "roll");
+        return;
+      }
+    }
+    if (currentPage == 4 && dashboardVoiceTouchTarget(designX, designY)) {
+      activeGesture = DashboardGesture::none;
+      touchPending = false;
+      toggleVoiceSession();
+      return;
+    }
     bool running = currentPage == 2 ? codex.active > 0
                                     : currentPage == 3 ? claude.active > 0 : false;
     if (running && dashboardPointInExpandedRect(
                        designX, designY, kCenterIconX, kCenterIconY,
-                       kCenterIconSize, kCenterIconSize, 14)) {
+                       kCenterIconSize, kCenterIconSize,
+                       kProviderIconTouchExpansion)) {
       activeGesture = DashboardGesture::none;
       touchPending = false;
       openTranscript();
@@ -3479,6 +4823,7 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
   }
   activeGesture = DashboardGesture::none;
   touchPending = false;
+  markProviderLoopDiagnostic(502);
 }
 
 void updateTouchInteraction(const m5::touch_detail_t &touch) {
@@ -3521,7 +4866,7 @@ void updateTouchInteraction(const m5::touch_detail_t &touch) {
           if (!dashboardPointInExpandedRect(designX, designY, x - 38, y - 38, 76, 76, 8)) {
             continue;
           }
-          if (items[index].provider == 'P') {
+          if (items[index].provider == 'F') {
             overlayMode = OverlayMode::none;
             currentPage = 1;
             startVibration(60, 30);
@@ -4170,6 +5515,8 @@ void stopVoiceCaptureHardware() {
 }
 
 void endVoiceCapture() {
+  if (voiceSessionActive) performTypelessAction("stop");
+  voiceSessionActive = false;
 #if defined(M5DASH_USB_AUDIO)
   // Invalidate the PCM stream first, then leave the microphone UI immediately.
   // I2S/task cleanup can take a few hundred milliseconds, but it no longer
@@ -4188,15 +5535,37 @@ void endVoiceCapture() {
 
 void toggleVoiceSession() {
   if (!voiceSessionActive) {
+    if (!typelessUsbAvailable()) {
+      startVibration(45, 24);
+      drawCurrentPage();
+      return;
+    }
     voiceSessionActive = beginVoiceCapture();
+    if (voiceSessionActive) performTypelessAction("start");
     return;
   }
 
-  voiceSessionActive = false;
   endVoiceCapture();
 }
 
 void updateVoiceAudio() {
+  static bool usbAvailabilityInitialized = false;
+  static bool previousUsbAvailability = false;
+  bool usbAvailable = typelessUsbAvailable();
+  if (!usbAvailabilityInitialized) {
+    usbAvailabilityInitialized = true;
+    previousUsbAvailability = usbAvailable;
+  } else if (usbAvailable != previousUsbAvailability) {
+    previousUsbAvailability = usbAvailable;
+    if (voiceSessionActive && !usbAvailable) {
+      endVoiceCapture();
+      return;
+    }
+    if (!screenLocked && appMode == DashboardAppMode::dashboard &&
+        currentPage == 4) {
+      drawCurrentPage();
+    }
+  }
   if (voiceSessionActive && voiceCaptureFailed && !voiceCaptureActive) {
     voiceSessionActive = false;
 #if defined(M5DASH_USB_AUDIO)
@@ -4236,26 +5605,25 @@ void updateOverlayTimeout() {
   drawCurrentPage();
 }
 
-bool readVoiceButtonPressed() {
+bool readBButtonPressed() {
   // M5Unified normally owns button debouncing. The raw KEYB read is an explicit
   // fallback for StopWatch builds where the board-specific button event is lost.
-  return M5.BtnB.isPressed() || digitalRead(kVoiceButtonPin) == LOW;
+  return M5.BtnB.isPressed() || digitalRead(kBButtonPin) == LOW;
 }
 
-void beginVoiceButtonPress() {
-  voiceButtonTracking = true;
-  voiceButtonConsumed = false;
-  voiceButtonPressedAt = millis();
+void beginBButtonPress() {
+  bButtonTracking = true;
+  bButtonConsumed = false;
+  bButtonLongTriggered = false;
+  bButtonPressedAt = millis();
   requireHighPerformance();
-  overlayMode = OverlayMode::voice;
-  overlayUntilAt = millis() + kButtonOverlayMs;
-  drawCurrentPage();
 }
 
-void cancelVoiceButtonPress() {
-  voiceButtonTracking = false;
-  voiceButtonConsumed = false;
-  voiceButtonPressedAt = 0;
+void cancelBButtonPress() {
+  bButtonTracking = false;
+  bButtonConsumed = false;
+  bButtonLongTriggered = false;
+  bButtonPressedAt = 0;
 }
 
 void beginAButtonPress() {
@@ -4276,12 +5644,21 @@ void cancelAButtonPress() {
 }  // namespace
 
 void setup() {
+  bootResetReason = static_cast<uint8_t>(esp_reset_reason());
+  if (renderDiagnosticMagic == kRenderDiagnosticMagic) {
+    previousRenderDiagnosticStage = renderDiagnosticStage;
+    previousRenderDiagnosticPage = renderDiagnosticPage <= 7 ? renderDiagnosticPage : 7;
+  } else {
+    previousRenderDiagnosticStage = 0;
+    previousRenderDiagnosticPage = 7;
+  }
+  markRenderDiagnostic(1);
   bool shouldOpenSavedWifiPicker = openWifiPickerAfterRestart;
   openWifiPickerAfterRestart = false;
   auto config = M5.config();
   config.clear_display = true;
   M5.begin(config);
-  pinMode(kVoiceButtonPin, INPUT_PULLUP);
+  pinMode(kBButtonPin, INPUT_PULLUP);
   configurePowerButtonPolicy();
   disableBottomLed();
   M5.Display.setRotation(0);
@@ -4292,10 +5669,26 @@ void setup() {
   canvas.setColorDepth(16);
   canvas.createSprite(kUiDesignSize, kUiDesignSize);
   initializeUiChineseFont();
+  initializeStopwatchDigitFont();
+  initializeEditorialFonts();
   frameCanvas.setColorDepth(16);
   frameCanvasReady = frameCanvas.createSprite(kUiFrameSize, kUiFrameSize) != nullptr;
-  iconCanvas.setColorDepth(16);
-  iconCanvasReady = iconCanvas.createSprite(kCenterIconSize, kCenterIconSize) != nullptr;
+  stopwatchTimeCanvas.setColorDepth(16);
+  stopwatchTimeCanvasReady =
+      stopwatchTimeCanvas.createSprite(kStopwatchTimeWidth, kStopwatchTimeHeight) != nullptr;
+  clockSecondCanvas.setColorDepth(16);
+  clockSecondCanvasReady =
+      clockSecondCanvas.createSprite(kClockSecondPatchWidth, kClockSecondPatchHeight) != nullptr;
+  aiHotspotBurstCanvas.setColorDepth(16);
+  aiHotspotBurstCanvasReady =
+      aiHotspotBurstCanvas.createSprite(220, 220) != nullptr;
+  if (aiHotspotBurstCanvasReady) {
+    aiHotspotBurstCanvas.fillSprite(editorialPaperColor());
+    aiHotspotBurstCanvas.drawPng(
+        ai_hotspot_burst_source_png, ai_hotspot_burst_source_png_len,
+        0, 0, 220, 220, 0, 0, 1.0f, 1.0f, datum_t::top_left);
+    aiHotspotBurstCanvas.setPivot(110, 110);
+  }
   transitionCanvas.setColorDepth(16);
   transitionCanvasReady =
       transitionCanvas.createSprite(kUiFrameSize, kUiFrameSize) != nullptr;
@@ -4304,7 +5697,7 @@ void setup() {
 
   DashboardSettings defaults;
   // Credentials never ship inside firmware images. Existing devices load their
-  // saved NVS values; a fresh device opens the provisioning portal.
+  // saved NVS values; a fresh device pairs with the local bridge over USB.
   defaults.ssid = "";
   defaults.password = "";
   defaults.ssid2 = "";
@@ -4327,7 +5720,7 @@ void setup() {
   // Rotate profiles ourselves so Arduino-ESP32 2.x and 3.x never get stuck
   // retrying a stale SDK-managed profile.
   WiFi.setAutoReconnect(false);
-  connectWifi();
+  if (settings.ssid.length() > 0 || settings.ssid2.length() > 0) connectWifi();
   if (!configMode) {
     drawCurrentPage();
     if (shouldOpenSavedWifiPicker) openWifiPicker();
@@ -4335,13 +5728,9 @@ void setup() {
 }
 
 void loop() {
+  markProviderLoopDiagnostic(600);
   M5.update();
   updatePowerButton();
-  if (screenLocked) {
-    delay(25);
-    return;
-  }
-
   updateVibration();
   updateTonePattern();
   updateVoiceAudio();
@@ -4349,15 +5738,39 @@ void loop() {
   updateDevicePower();
   if (usbAudioStreaming) requireHighPerformance();
   updateCpuPolicy();
+  if (screenLocked) {
+    // Keep the lightweight data plane alive with the AMOLED, touch controller
+    // and microphone asleep. State updates can therefore trigger an audible
+    // AI-hotspot alert and arm page 6 for the next wake.
+    if (configMode) {
+      provisioning.handle();
+      delay(10);
+      return;
+    }
+    updateUsbBridge();
+    if (settings.ssid.length() > 0 || settings.ssid2.length() > 0) connectWifi();
+    updateBridgeDiscovery();
+    uint32_t now = millis();
+    if (now - lastFetchAt >= dashboardStateRefreshInterval() &&
+        !usbReplyPending(now, lastUsbRequestAt, kUsbReplyGraceMs)) {
+      lastFetchAt = now;
+      if (!usbBridgeOnline && !fetchState()) bridgeOnline = false;
+    }
+    delay(25);
+    return;
+  }
+
   updateOverlayTimeout();
   updateCompletionAnimation();
   updateCenterIconAnimation();
   updateResultBallImuAnimation();
+  updateObsidianDiceShake();
+  markProviderLoopDiagnostic(610);
   if (configMode) {
-    bool bothButtons = M5.BtnA.isPressed() && readVoiceButtonPressed();
+    bool bothButtons = M5.BtnA.isPressed() && readBButtonPressed();
     if (!bothButtons) configHoldTriggered = false;
     if (bothButtons && !configHoldTriggered &&
-        M5.BtnA.pressedFor(2500) && millis() - voiceButtonPressedAt >= 2500) {
+        M5.BtnA.pressedFor(2500)) {
       configHoldTriggered = true;
       stopVibration();
       ESP.restart();
@@ -4368,18 +5781,57 @@ void loop() {
     return;
   }
 
+  if (appMode != DashboardAppMode::dashboard) {
+    updateAppShellButtons();
+    updateUsbBridge();
+    if (settings.ssid.length() > 0 || settings.ssid2.length() > 0) connectWifi();
+    updateBridgeDiscovery();
+
+    auto shellTouch = M5.Touch.getDetail();
+    updateAppShellTouch(shellTouch);
+
+    uint32_t now = millis();
+    if (appMode == DashboardAppMode::stopwatch &&
+        localStopwatch.state == LocalStopwatchState::running &&
+        static_cast<uint32_t>(now - lastLocalStopwatchDrawAt) >=
+            kStopwatchFrameIntervalMs) {
+      lastLocalStopwatchDrawAt = now;
+      requireHighPerformance();
+      drawLocalStopwatchTimeOnly();
+    }
+    if (now - lastFetchAt >= dashboardStateRefreshInterval() &&
+        !usbReplyPending(now, lastUsbRequestAt, kUsbReplyGraceMs)) {
+      lastFetchAt = now;
+      if (!usbBridgeOnline && !fetchState()) bridgeOnline = false;
+      drawCurrentPage();
+    }
+    delay(10);
+    return;
+  }
+
+  DashboardClickAction aPendingAction =
+      flushDashboardClick(aClickState, millis(), kFocusDoubleClickMs);
+  DashboardClickAction bPendingAction =
+      flushDashboardClick(bClickState, millis(), kFocusDoubleClickMs);
+  if (aPendingAction == DashboardClickAction::singleClick) {
+    performTickTickAction("stopwatch-click");
+  }
+  if (bPendingAction == DashboardClickAction::singleClick) {
+    performTickTickAction("countdown-click");
+  }
+
   bool aButtonPressed = M5.BtnA.isPressed();
   if (aButtonPressed && !aButtonTracking) beginAButtonPress();
-  bool voiceButtonPressed = readVoiceButtonPressed();
-  if (voiceButtonPressed && !voiceButtonTracking) beginVoiceButtonPress();
+  bool bButtonPressed = readBButtonPressed();
+  if (bButtonPressed && !bButtonTracking) beginBButtonPress();
 
-  bool bothButtons = aButtonPressed && voiceButtonPressed;
+  bool bothButtons = aButtonPressed && bButtonPressed;
   if (bothButtons) {
     configChordActive = true;
     aButtonConsumed = true;
   }
   if (bothButtons && !configHoldTriggered &&
-      M5.BtnA.pressedFor(2500) && millis() - voiceButtonPressedAt >= 2500) {
+      M5.BtnA.pressedFor(2500) && millis() - bButtonPressedAt >= 2500) {
     configHoldTriggered = true;
     startProvisioning();
     return;
@@ -4388,22 +5840,32 @@ void loop() {
 
   if (configChordActive) {
     aButtonConsumed = true;
-    voiceButtonConsumed = true;
+    bButtonConsumed = true;
     if (voiceSessionActive) {
       endVoiceCapture();
       voiceSessionActive = false;
     }
-    if (!aButtonPressed && !voiceButtonPressed) {
+    if (!aButtonPressed && !bButtonPressed) {
       configChordActive = false;
       cancelAButtonPress();
-      cancelVoiceButtonPress();
+      cancelBButtonPress();
     }
   } else {
-    if (!voiceButtonPressed && voiceButtonTracking) {
-      if (shouldToggleVoiceSessionOnRelease(voiceButtonTracking, voiceButtonConsumed)) {
-        toggleVoiceSession();
+    if (bButtonPressed && bButtonTracking && !bButtonLongTriggered &&
+        static_cast<uint32_t>(millis() - bButtonPressedAt) >= kBButtonLongPressMs) {
+      bButtonLongTriggered = true;
+      bButtonConsumed = true;
+      returnToClockPage();
+    }
+    if (!bButtonPressed && bButtonTracking) {
+      if (!bButtonConsumed) {
+        DashboardClickAction action =
+            queueDashboardClick(bClickState, millis(), kFocusDoubleClickMs);
+        if (action == DashboardClickAction::doubleClick) {
+          performTickTickAction("countdown-end");
+        }
       }
-      cancelVoiceButtonPress();
+      cancelBButtonPress();
     }
     if (aButtonPressed && aButtonTracking && !aButtonLongTriggered &&
         static_cast<uint32_t>(millis() - aButtonPressedAt) >= kAButtonLongPressMs) {
@@ -4413,27 +5875,71 @@ void loop() {
       openWifiPicker();
     }
     if (!aButtonPressed && aButtonTracking) {
-      if (!aButtonConsumed) showConnectionStatus();
+      if (!aButtonConsumed) {
+        DashboardClickAction action =
+            queueDashboardClick(aClickState, millis(), kFocusDoubleClickMs);
+        if (action == DashboardClickAction::doubleClick) {
+          performTickTickAction("stopwatch-end");
+        }
+      }
       cancelAButtonPress();
     }
   }
 
+  markProviderLoopDiagnostic(630);
   updateUsbBridge();
+  markProviderLoopDiagnostic(631);
   connectWifi();
+  markProviderLoopDiagnostic(632);
   if (configMode) {
     delay(2);
     return;
   }
   updateBridgeDiscovery();
+  markProviderLoopDiagnostic(633);
 
   auto touch = M5.Touch.getDetail();
+  markProviderLoopDiagnostic(640);
   updateTouchInteraction(touch);
+  markProviderLoopDiagnostic(641);
+
+  uint32_t tickSecond = millis() / 1000;
+  if (haveData && appMode == DashboardAppMode::dashboard && currentPage == 0 &&
+      overlayMode == OverlayMode::none &&
+      !completionAnimationActive(millis())) {
+    struct tm clockNow = {};
+    if (clockLocalTime(clockNow)) {
+      int minuteKey = clockNow.tm_hour * 60 + clockNow.tm_min;
+      DashboardClockRefresh refresh = dashboardClockRefresh(
+          clockNow.tm_sec, lastClockDrawSecond, minuteKey, lastClockDrawMinute);
+      if (refresh == DashboardClockRefresh::fullPage) {
+        drawCurrentPage();
+      } else if (refresh == DashboardClockRefresh::secondsOnly) {
+        drawClockSecondOnly(clockNow);
+      }
+    }
+  }
+  if (haveData && currentPage == 1 &&
+      (timerRunning(ticktick.stopwatchState) || timerRunning(ticktick.countdownState)) &&
+      tickSecond != lastTickTickDrawSecond) {
+    lastTickTickDrawSecond = tickSecond;
+    drawCurrentPage();
+  }
 
   if (millis() - lastFetchAt >= dashboardStateRefreshInterval() &&
       !usbReplyPending(millis(), lastUsbRequestAt, kUsbReplyGraceMs)) {
     lastFetchAt = millis();
     if (!usbBridgeOnline && !fetchState()) bridgeOnline = false;
-    drawCurrentPage();
+    // The Clock page owns a once-per-second patch renderer. Do not undo that
+    // work with the normal two-second state-sync redraw; the next minute
+    // boundary refreshes the complete page and picks up weather, usage, focus,
+    // and battery changes. Overlays and completion animations still redraw
+    // immediately because they replace the base clock surface.
+    bool deferClockStateRedraw =
+        haveData && appMode == DashboardAppMode::dashboard && currentPage == 0 &&
+        overlayMode == OverlayMode::none && !completionAnimationActive(millis());
+    if (!deferClockStateRedraw) drawCurrentPage();
   }
+  markProviderLoopDiagnostic(699);
   delay(10);
 }

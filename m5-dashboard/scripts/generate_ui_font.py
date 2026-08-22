@@ -61,17 +61,33 @@ def render_glyph(font: ImageFont.FreeTypeFont, character: str) -> tuple[bytes, t
 
 
 def build_vlw(
-    font_path: Path, size: int, *, require_noto_identity: bool = True
+    font_path: Path,
+    size: int,
+    *,
+    require_noto_identity: bool = True,
+    characters: list[str] | None = None,
+    marker: str | None = None,
 ) -> tuple[bytes, dict[str, object]]:
     font = ImageFont.truetype(str(font_path), size=size)
     family, style = font.getname()
-    identity_verified = "Noto Sans CJK SC" in family and "Regular" in style
+    identity_verified = family in {
+        "Noto Sans CJK SC",
+        "Noto Sans S Chinese",
+        "Noto Sans SC",
+    } and style in {
+        "Regular",
+        "Medium",
+        "Bold",
+    }
     if require_noto_identity and not identity_verified:
         raise SystemExit(
-            f"Font identity mismatch: expected Noto Sans CJK SC Regular, got {family} {style}"
+            f"Font identity mismatch: expected Noto Sans CJK SC Regular/Medium/Bold, got {family} {style}"
         )
     ascent, descent = font.getmetrics()
-    characters = gb2312_characters()
+    full_ui_set = characters is None
+    characters = gb2312_characters() if characters is None else sorted(set(characters), key=ord)
+    if not characters:
+        raise SystemExit("Font subset must contain at least one character")
     records: list[bytes] = []
     bitmaps: list[bytes] = []
     for character in characters:
@@ -95,12 +111,13 @@ def build_vlw(
     ]
     if encoded_codepoints != sorted(encoded_codepoints):
         raise SystemExit("VLW glyph records are not sorted by Unicode codepoint")
-    required = set("麦克风正在收音对话你任务关闭")
-    if not required.issubset(characters):
+    required = set("麦克风正在收音对话你任务关闭") if full_ui_set else set()
+    if required and not required.issubset(characters):
         raise SystemExit("VLW font is missing required UI probe glyphs")
+    verified_marker = marker or FONT_MARKER
     manifest: dict[str, object] = {
         "font_name": f"{family} {style}",
-        "font_marker": FONT_MARKER if identity_verified else "M5DASH_FONT_DEVELOPMENT_ONLY",
+        "font_marker": verified_marker if identity_verified else "M5DASH_FONT_DEVELOPMENT_ONLY",
         "identity_verified": identity_verified,
         "pixel_size": size,
         "glyph_count": len(characters),
@@ -135,8 +152,13 @@ def write_preview(path: Path, font_path: Path) -> None:
 def main() -> int:
     project = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description="Generate the embedded Noto Sans SC M5GFX font")
-    parser.add_argument("font", type=Path, help="Path to NotoSansCJKsc-Regular.otf")
+    parser.add_argument("font", type=Path, help="Path to an official NotoSansCJKsc OTF")
     parser.add_argument("--size", type=int, default=DEFAULT_SIZE)
+    parser.add_argument(
+        "--characters",
+        help="Optional exact glyph subset; omitted builds the complete UI set",
+    )
+    parser.add_argument("--marker", help="Embedded identity marker for a subset font")
     parser.add_argument(
         "--output",
         type=Path,
@@ -157,10 +179,21 @@ def main() -> int:
     font_path = args.font.expanduser().resolve()
     if not font_path.is_file():
         raise SystemExit(f"Font file does not exist: {font_path}")
-    if font_path.name != "NotoSansCJKsc-Regular.otf":
-        raise SystemExit("Expected the official file named NotoSansCJKsc-Regular.otf")
+    if font_path.name not in {
+        "NotoSansCJKsc-Regular.otf",
+        "NotoSansCJKsc-Medium.otf",
+        "NotoSansCJKsc-Bold.otf",
+        "NotoSansSC-Bold.ttf",
+    }:
+        raise SystemExit("Expected an official NotoSansCJKsc Regular/Medium/Bold OTF")
 
-    vlw, manifest = build_vlw(font_path, args.size)
+    subset = list(args.characters) if args.characters is not None else None
+    vlw, manifest = build_vlw(
+        font_path,
+        args.size,
+        characters=subset,
+        marker=args.marker,
+    )
     manifest["embedded_storage"] = "direct_flash_vlw"
     args.output.resolve().parent.mkdir(parents=True, exist_ok=True)
     args.output.resolve().write_bytes(vlw)

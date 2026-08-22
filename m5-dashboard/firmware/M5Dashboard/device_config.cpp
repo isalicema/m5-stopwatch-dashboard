@@ -62,18 +62,29 @@ DashboardSettings loadDashboardSettings(const DashboardSettings &defaults) {
 bool saveDashboardSettings(const DashboardSettings &settings) {
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) return false;
-  bool ok = true;
-  ok = prefs.putString("ssid", settings.ssid) > 0 && ok;
+  prefs.putString("ssid", settings.ssid);
   // Empty passwords are valid for open Wi-Fi networks.
   prefs.putString("password", settings.password);
   prefs.putString("ssid2", settings.ssid2);
   prefs.putString("password2", settings.password2);
   prefs.putString("host", settings.host);
-  ok = prefs.putUShort("port", settings.port) > 0 && ok;
-  ok = prefs.putString("token", settings.token) > 0 && ok;
+  prefs.putUShort("port", settings.port);
+  prefs.putString("token", settings.token);
   prefs.putString("token2", settings.token2);
-  ok = prefs.putBool("seeded", true) > 0 && ok;
-  ok = prefs.putUChar("version", kSettingsVersion) > 0 && ok;
+  prefs.putBool("seeded", true);
+  prefs.putUChar("version", kSettingsVersion);
+  // putString returns zero both for an error and for a valid empty string.
+  // Verify by reading back so USB-only settings with no SSID are legitimate.
+  bool ok = prefs.getString("ssid", "\x01") == settings.ssid &&
+            prefs.getString("password", "\x01") == settings.password &&
+            prefs.getString("ssid2", "\x01") == settings.ssid2 &&
+            prefs.getString("password2", "\x01") == settings.password2 &&
+            prefs.getString("host", "\x01") == settings.host &&
+            prefs.getUShort("port", 0) == settings.port &&
+            prefs.getString("token", "\x01") == settings.token &&
+            prefs.getString("token2", "\x01") == settings.token2 &&
+            prefs.getBool("seeded", false) &&
+            prefs.getUChar("version", 0) == kSettingsVersion;
   prefs.end();
   return ok;
 }

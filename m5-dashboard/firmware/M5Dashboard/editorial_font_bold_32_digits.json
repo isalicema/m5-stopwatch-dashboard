@@ -1,0 +1,15 @@
+{
+  "font_name": "Noto Sans SC Bold",
+  "font_marker": "M5DASH_FONT_EDITORIAL_BOLD_32_DIGITS_V1",
+  "identity_verified": true,
+  "pixel_size": 32,
+  "glyph_count": 10,
+  "first_codepoint": 48,
+  "last_codepoint": 57,
+  "vlw_size": 5092,
+  "vlw_sha256": "b6d662c48e5b7f6a6abd0e30ba7015c0f382325fc2fc98eed94bdad071cd656a",
+  "source_file": "NotoSansSC-Bold.ttf",
+  "source_sha256": "5b7526e7f77b48a1c97483f7476aef3ab8e9d526d66f565ef4592eb7b69f3fff",
+  "required_probe_glyphs": "",
+  "embedded_storage": "direct_flash_vlw"
+}

@@ -1,0 +1,15 @@
+{
+  "font_name": "Noto Sans S Chinese Bold",
+  "font_marker": "M5DASH_FONT_EDITORIAL_BOLD_104_V1",
+  "identity_verified": true,
+  "pixel_size": 104,
+  "glyph_count": 17,
+  "first_codepoint": 45,
+  "last_codepoint": 86,
+  "vlw_size": 69466,
+  "vlw_sha256": "c165d2b761462a4ae36ac3ee33cccb7e3db42def0607121a7995a20e68a52dfd",
+  "source_file": "NotoSansCJKsc-Bold.otf",
+  "source_sha256": "9e7729ef993ca4c647882f798644f4bbf6da69bd822eac593fc68717dd6c8e2a",
+  "required_probe_glyphs": "",
+  "embedded_storage": "direct_flash_vlw"
+}

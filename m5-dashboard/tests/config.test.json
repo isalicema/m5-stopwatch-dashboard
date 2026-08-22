@@ -4,9 +4,8 @@
     "port": 18765,
     "api_token": "local-test-token"
   },
-  "bambu": {
-    "enabled": false,
-    "name": "P2S"
+  "ticktick": {
+    "enabled": false
   },
   "codex": {
     "enabled": true,

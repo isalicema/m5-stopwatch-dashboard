@@ -17,6 +17,10 @@ from typing import List, Tuple
 
 
 REQUIRED_UI_FONT_MARKER = b"M5DASH_FONT_NOTO_SANS_CJK_SC_16_V1"
+# The factory C152 partition table uses ota_0 at 0x20000 with 0x4f0000 bytes.
+# This script intentionally preserves that bootloader/partition/NVS layout.
+APP_FLASH_OFFSET = 0x20000
+APP_PARTITION_SIZE = 0x4F0000
 DASHBOARD_SERVICE_LABELS = (
     "com.local.m5dashboard.bridge",
     "com.local.m5dashboard.home.bridge",
@@ -29,6 +33,14 @@ def require_noto_ui_font(firmware: Path) -> None:
         raise SystemExit(
             "拒绝烧录：这个应用固件没有嵌入 Noto Sans CJK SC 字体标记，"
             "继续烧录会出现界面改了但字体没变的问题"
+        )
+
+
+def require_factory_app_partition_fit(firmware: Path) -> None:
+    if firmware.stat().st_size > APP_PARTITION_SIZE:
+        raise SystemExit(
+            "拒绝烧录：应用固件大于 StopWatch 原厂 ota_0 分区 "
+            f"({firmware.stat().st_size} > {APP_PARTITION_SIZE} bytes)"
         )
 
 
@@ -146,6 +158,7 @@ def main() -> None:
     if not firmware.is_file():
         raise SystemExit("找不到固件：%s" % firmware)
     require_noto_ui_font(firmware)
+    require_factory_app_partition_fit(firmware)
 
     ports = serial_ports()
     port = args.port
@@ -182,7 +195,7 @@ def main() -> None:
             "80m",
             "--flash_size",
             "16MB",
-            "0x10000",
+            hex(APP_FLASH_OFFSET),
             str(firmware),
         ]
         print("正在烧录 %s；只更新应用分区，家庭 Wi-Fi 和现有令牌会保留。" % port)

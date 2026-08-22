@@ -3,13 +3,13 @@
   "font_marker": "M5DASH_FONT_NOTO_SANS_CJK_SC_16_V1",
   "identity_verified": true,
   "pixel_size": 16,
-  "glyph_count": 7544,
+  "glyph_count": 7545,
   "first_codepoint": 33,
   "last_codepoint": 65509,
-  "vlw_size": 2103621,
-  "vlw_sha256": "2dcdd8f59651c374156e183840d03c065bb153f2639cca29311b573e2d14cc7a",
+  "vlw_size": 2103905,
+  "vlw_sha256": "00873b11cbaffddc13efa5a33b98544df6933e1383c7bbd27aa3bf7e40c34b5b",
   "source_file": "NotoSansCJKsc-Regular.otf",
-  "source_sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+  "source_sha256": "b647259c4ec43ff7c0148dacb5908e0814509698cd28e355d4ec77ed7e35528f",
   "required_probe_glyphs": "任你克关务在对收正话闭音风麦",
   "embedded_storage": "direct_flash_vlw"
 }

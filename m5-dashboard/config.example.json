@@ -19,13 +19,93 @@
     "refresh_seconds": 3600,
     "timeout_seconds": 8
   },
-  "bambu": {
-    "enabled": false,
-    "name": "P2S",
-    "mode": "cloud",
-    "region": "cn",
-    "credentials_file": "~/Library/Application Support/M5Dashboard/bambu-cloud.json",
-    "full_refresh_seconds": 300
+  "ai_usage": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8177",
+    "timezone": "Asia/Shanghai",
+    "refresh_seconds": 30,
+    "timeout_seconds": 10,
+    "quota_timeout_seconds": 30
+  },
+  "ai_hotspot": {
+    "enabled": true,
+    "refresh_seconds": 30,
+    "timeout_seconds": 12,
+    "state_path": "~/Library/Application Support/M5Dashboard/ai_hotspots.json",
+    "max_age_hours": 24,
+    "max_queue": 50,
+    "official_refresh_seconds": 300,
+    "interest_terms": ["Codex", "OpenAI", "GPT", "ChatGPT Work", "Claude", "Claude Code", "Anthropic", "Gemini", "DeepMind", "DeepSeek", "Kimi", "Moonshot", "月之暗面", "Agent", "MCP", "Coding Agent", "模型", "额度"],
+    "event_terms": ["正式发布", "正式上线", "全面上线", "发布", "上线", "重置", "额度", "价格", "套餐", "故障", "中断", "安全事件", "多模态", "视觉模型", "launch", "released", "generally available", "deprecation", "pricing", "quota", "rate limit", "reset", "outage", "incident", "security", "multimodal", "vision model", "vision-exp"],
+    "negative_terms": ["融资", "合作", "加入", "收购", "招聘", "观点", "教学", "教程", "论文", "研究", "partnership", "funding", "acquisition", "joins", "hiring", "case study", "teaching", "learning", "paper"],
+    "official_domains": ["openai.com", "anthropic.com", "claude.com", "deepmind.google", "blog.google", "ai.google.dev", "deepseek.com", "moonshot.cn", "moonshot.ai", "kimi.com", "kimi.ai"],
+    "official_url_prefixes": ["https://x.com/deepseek_ai/", "https://github.com/deepseek-ai/", "https://huggingface.co/deepseek-ai/", "https://x.com/Kimi_Moonshot/", "https://github.com/moonshotai/", "https://huggingface.co/moonshotai/"],
+    "codex_resets": {
+      "enabled": true,
+      "status_url": "https://codex-resets.com/api/v1/status",
+      "refresh_seconds": 60
+    },
+    "aihot": {
+      "enabled": true,
+      "snapshot_url": "https://aihot.virxact.com/api/v1/selected/snapshot",
+      "changes_url": "https://aihot.virxact.com/api/v1/selected/changes",
+      "hot_topics_url": "https://aihot.virxact.com/api/v1/hot-topics",
+      "fields": "default",
+      "refresh_seconds": 300
+    },
+    "official_sources": [
+      {"name": "OpenAI News", "url": "https://openai.com/news/rss.xml"},
+      {"name": "Google AI", "url": "https://blog.google/innovation-and-ai/technology/ai/rss/"}
+    ]
+  },
+  "obsidian": {
+    "enabled": true,
+    "roots": ["~/Smart Workspace"],
+    "exclude_names": [".obsidian", ".trash", ".git", "node_modules", "Alice Writing"],
+    "never_include_names": ["Alice Writing"],
+    "pools": [
+      {
+        "name": "核心洞察",
+        "weight": 4,
+        "folders": [
+          {"path": "Insights", "weight": 1},
+          {"path": "Machiwhale Studio", "weight": 1},
+          {"path": "Alice兴趣研究", "weight": 1},
+          {"path": "Tech History", "weight": 1},
+          {"path": "妙蛙种子进化史", "weight": 1}
+        ]
+      },
+      {
+        "name": "灵感探索",
+        "weight": 1,
+        "folders": [
+          {"path": "妙蛙种子收藏夹", "weight": 1},
+          {"path": "Newsletter Digests", "weight": 0.8},
+          {"path": "HCI arXiv", "weight": 0.6},
+          {"path": "rabbitT dream", "weight": 0.35},
+          {"path": "Codex Report", "weight": 0.25}
+        ]
+      }
+    ],
+    "cooldown_count": 30,
+    "state_path": "~/Library/Application Support/M5Dashboard/obsidian-dice.json",
+    "refresh_seconds": 900,
+    "max_files": 5000
+  },
+  "ticktick": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8787",
+    "token": "",
+    "timeout_seconds": 2,
+    "refresh_seconds": 1,
+    "duration_seconds": 1500
+  },
+  "typeless": {
+    "enabled": true,
+    "helper_path": "~/Library/Application Support/M5Dashboard/TypelessKeySender.app/Contents/MacOS/TypelessKeySender",
+    "shortcut": "ctrl-cmd-shift-space",
+    "command_timeout_seconds": 5,
+    "startup_delay_seconds": 1.0
   },
   "codex": {
     "enabled": true,
@@ -41,15 +121,11 @@
     "peer_usage_sources": []
   },
   "claude": {
-    "enabled": false,
+    "enabled": true,
+    "local_only": true,
     "refresh_seconds": 60,
     "activity_refresh_seconds": 3,
     "activity_stale_seconds": 1800,
-    "expose_transcript": false,
-    "source": {
-      "base_url": "http://IMAC-IP:8787",
-      "password": "",
-      "timeout_seconds": 5
-    }
+    "expose_transcript": false
   }
 }

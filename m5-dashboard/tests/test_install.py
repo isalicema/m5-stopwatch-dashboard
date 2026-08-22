@@ -1,6 +1,10 @@
 import importlib.util
 import json
+import os
+import tempfile
+import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def load_installer():
@@ -12,64 +16,225 @@ def load_installer():
     return module
 
 
-def test_typeless_uses_system_default_and_fn():
-    installer = load_installer()
-    settings = {
-        "microphoneDevices": [
-            {
-                "deviceId": "default",
-                "kind": "audioinput",
-                "label": "Default",
-                "groupId": "portable-group",
+class InstallTests(unittest.TestCase):
+    def setUp(self):
+        self.installer = load_installer()
+
+    def test_typeless_uses_system_default_and_stopwatch_shortcuts(self):
+        settings = {
+            "microphoneDevices": [
+                {
+                    "deviceId": "default",
+                    "kind": "audioinput",
+                    "label": "Default",
+                    "groupId": "portable-group",
+                }
+            ],
+            "featureShortcutBindings": {"dictationMode": ["F8"]},
+            "enabledMuteBackgroundAudio": True,
+        }
+
+        updated = self.installer._updated_typeless_settings(settings)
+
+        self.assertEqual(updated["selectedMicrophoneDevice"]["deviceId"], "default")
+        self.assertEqual(updated["selectedMicrophoneDevice"]["groupId"], "portable-group")
+        self.assertEqual(
+            updated["featureShortcutBindings"]["dictationMode"],
+            ["Fn", "LeftCtrl+LeftCmd+LeftShift+Space"],
+        )
+        self.assertFalse(updated["enabledMuteBackgroundAudio"])
+        self.assertIsNone(updated["preferredBuiltInMicId"])
+
+    def test_copy_app_rewrites_paths_and_keeps_transcripts_private(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "shared-package"
+            target = root / "different-user/Library/Application Support/M5Dashboard"
+            (project / "bridge").mkdir(parents=True)
+            (project / "bridge/__init__.py").write_text("", encoding="utf-8")
+            (project / "config.json").write_text(
+                json.dumps(
+                    {
+                        "bambu": {"credentials_file": "/tmp/old/bambu-cloud.json"},
+                        "codex": {
+                            "hook_state_path": "/tmp/old/codex_hooks.json",
+                            "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
+                            "expose_transcript": False,
+                        },
+                        "claude": {"expose_transcript": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            p = {
+                "project": project,
+                "target": target,
+                "installed_app": target / "app",
+                "config": target / "config.json",
             }
-        ],
-        "featureShortcutBindings": {"dictationMode": ["F8"]},
-        "enabledMuteBackgroundAudio": True,
-    }
 
-    updated = installer._updated_typeless_settings(settings)
+            with mock.patch.object(
+                self.installer.secrets, "token_urlsafe", return_value="generated-local-token_123456"
+            ):
+                self.installer.copy_app(p)
 
-    assert updated["selectedMicrophoneDevice"]["deviceId"] == "default"
-    assert updated["selectedMicrophoneDevice"]["groupId"] == "portable-group"
-    assert updated["featureShortcutBindings"]["dictationMode"] == ["Fn"]
-    assert updated["enabledMuteBackgroundAudio"] is False
-    assert updated["preferredBuiltInMicId"] is None
+            installed = json.loads(p["config"].read_text(encoding="utf-8"))
+            self.assertNotIn("bambu", installed)
+            self.assertTrue(installed["ticktick"]["enabled"])
+            self.assertEqual(installed["ticktick"]["duration_seconds"], 1500)
+            self.assertEqual(installed["codex"]["hook_state_path"], str(target / "codex_hooks.json"))
+            self.assertFalse(installed["codex"]["expose_transcript"])
+            self.assertFalse(installed["claude"]["expose_transcript"])
+            self.assertTrue(installed["ai_usage"]["enabled"])
+            self.assertEqual(installed["ai_usage"]["base_url"], "http://127.0.0.1:8177")
+            self.assertTrue(installed["ai_hotspot"]["enabled"])
+            self.assertEqual(
+                installed["ai_hotspot"]["state_path"], str(target / "ai_hotspots.json")
+            )
+            self.assertTrue(installed["obsidian"]["enabled"])
+            self.assertEqual(
+                installed["obsidian"]["roots"], [str(Path.home() / "Smart Workspace")]
+            )
+            self.assertIn("Alice Writing", installed["obsidian"]["exclude_names"])
+            self.assertEqual(installed["server"]["api_token"], "generated-local-token_123456")
+            self.assertTrue(installed["server"]["usb_enabled"])
+            self.assertEqual(p["config"].stat().st_mode & 0o777, 0o600)
 
-
-def test_copy_app_rewrites_paths_for_each_mac(tmp_path):
-    installer = load_installer()
-    project = tmp_path / "shared-package"
-    target = tmp_path / "different-user" / "Library/Application Support/M5Dashboard"
-    (project / "bridge").mkdir(parents=True)
-    (project / "bridge/__init__.py").write_text("", encoding="utf-8")
-    (project / "dist/M5Workstation/private").mkdir(parents=True)
-    (project / "dist/M5Workstation/private/bambu-cloud.json").write_text(
-        '{"access_token":"private"}\n', encoding="utf-8"
-    )
-    (project / "config.json").write_text(
-        json.dumps(
-            {
-                "bambu": {"credentials_file": "/tmp/m5-test-home/M5Dashboard/bambu-cloud.json"},
-                "codex": {
-                    "hook_state_path": "/tmp/m5-test-home/M5Dashboard/codex_hooks.json",
-                    "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
-                },
+    def test_copy_app_preserves_an_existing_private_token(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "package"
+            target = root / "installed"
+            (project / "bridge").mkdir(parents=True)
+            (project / "bridge/__init__.py").write_text("", encoding="utf-8")
+            target.mkdir(parents=True)
+            config = target / "config.json"
+            config.write_text(
+                json.dumps({"server": {"api_token": "existing-private-token_123456"}}),
+                encoding="utf-8",
+            )
+            p = {
+                "project": project,
+                "target": target,
+                "installed_app": target / "app",
+                "config": config,
             }
-        ),
-        encoding="utf-8",
-    )
-    p = {
-        "project": project,
-        "target": target,
-        "installed_app": target / "app",
-        "config": target / "config.json",
-        "credentials": target / "bambu-cloud.json",
-    }
 
-    installer.copy_app(p)
+            with mock.patch.object(self.installer.secrets, "token_urlsafe") as generate:
+                self.installer.copy_app(p)
 
-    installed = json.loads(p["config"].read_text(encoding="utf-8"))
-    assert installed["bambu"]["credentials_file"] == str(p["credentials"])
-    assert installed["codex"]["hook_state_path"] == str(target / "codex_hooks.json")
-    assert p["credentials"].read_text(encoding="utf-8").startswith("{")
-    assert p["credentials"].stat().st_mode & 0o777 == 0o600
+            installed = json.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(installed["server"]["api_token"], "existing-private-token_123456")
+            generate.assert_not_called()
+
+    def test_audio_helper_builds_from_tracked_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "project/mac/M5AudioInput.c"
+            source.parent.mkdir(parents=True)
+            source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            helper = root / "installed/bin/m5_audio_input"
+            p = {"project": root / "project", "audio_helper": helper}
+
+            def fake_run(command, check):
+                self.assertTrue(check)
+                output = Path(command[command.index("-o") + 1])
+                output.write_bytes(b"compiled")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(self.installer.shutil, "which", return_value="/usr/bin/clang"), mock.patch.object(
+                self.installer.subprocess, "run", side_effect=fake_run
+            ):
+                self.installer._install_audio_helper_binary(p)
+
+            self.assertEqual(helper.read_bytes(), b"compiled")
+            self.assertTrue(os.access(helper, os.X_OK))
+
+    def test_typeless_key_helper_builds_as_a_stable_app_bundle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "project/mac/TypelessKeySender.c"
+            source.parent.mkdir(parents=True)
+            source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            helper = root / "installed/TypelessKeySender.app/Contents/MacOS/TypelessKeySender"
+            info = root / "installed/TypelessKeySender.app/Contents/Info.plist"
+            p = {
+                "project": root / "project",
+                "typeless_helper": helper,
+                "typeless_helper_info": info,
+            }
+
+            commands = []
+
+            def fake_run(command, check):
+                self.assertTrue(check)
+                commands.append(command)
+                if "-o" in command:
+                    output = Path(command[command.index("-o") + 1])
+                    output.write_bytes(b"compiled")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(
+                self.installer.shutil, "which", return_value="/usr/bin/clang"
+            ), mock.patch.object(
+                self.installer.subprocess, "run", side_effect=fake_run
+            ):
+                self.installer.install_typeless_key_sender(p)
+
+            self.assertEqual(helper.read_bytes(), b"compiled")
+            self.assertTrue(os.access(helper, os.X_OK))
+            self.assertEqual(
+                self.installer.plistlib.loads(info.read_bytes())["CFBundleExecutable"],
+                "TypelessKeySender",
+            )
+            self.assertTrue(
+                any(
+                    "--sign" in command
+                    and "studio.machiwhale.m5stopwatch.typeless-key-sender" in command
+                    for command in commands
+                )
+            )
+
+    def test_typeless_key_helper_is_not_resigned_when_source_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "project/mac/TypelessKeySender.c"
+            source.parent.mkdir(parents=True)
+            source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            app = root / "installed/TypelessKeySender.app"
+            helper = app / "Contents/MacOS/TypelessKeySender"
+            info = app / "Contents/Info.plist"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"approved-existing-helper")
+            info.write_bytes(b"existing-plist")
+            p = {
+                "project": root / "project",
+                "typeless_helper": helper,
+                "typeless_helper_info": info,
+            }
+
+            with mock.patch.object(
+                self.installer.shutil, "which", return_value="/usr/bin/clang"
+            ), mock.patch.object(self.installer.subprocess, "run") as run:
+                self.installer.install_typeless_key_sender(p)
+                self.installer.install_typeless_key_sender(p)
+
+            run.assert_not_called()
+            self.assertEqual(helper.read_bytes(), b"approved-existing-helper")
+            self.assertTrue(
+                (app.parent / ".TypelessKeySender.source-sha256").is_file()
+            )
+
+    def test_typeless_preflight_fails_before_install_without_settings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            p = {
+                "project": root / "project",
+                "typeless_settings": root / "missing-settings.json",
+            }
+            with self.assertRaisesRegex(SystemExit, "Open Typeless once"):
+                self.installer.preflight_typeless_install(p)
+
+
+if __name__ == "__main__":
+    unittest.main()

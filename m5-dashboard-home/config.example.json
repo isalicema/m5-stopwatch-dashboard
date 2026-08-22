@@ -14,14 +14,6 @@
     "refresh_seconds": 3600,
     "timeout_seconds": 8
   },
-  "bambu": {
-    "enabled": true,
-    "name": "造物神",
-    "mode": "cloud",
-    "region": "cn",
-    "credentials_file": "~/Library/Application Support/M5Dashboard/bambu-cloud.json",
-    "full_refresh_seconds": 300
-  },
   "codex": {
     "enabled": true,
     "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
