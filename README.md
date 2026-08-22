@@ -1,6 +1,6 @@
 # M5 StopWatch Dashboard
 
-> Alice 的个人分支以朋友的开源 Dashboard 为底座；项目基线、当前加固、真机首次连接顺序
+> Alice 的个人分支以好友@Googler0825 的开源 Dashboard 为底座；项目基线、当前加固、真机首次连接顺序
 > 与后续个性化路线见 [PROJECT.md](PROJECT.md)。
 
 一个面向 M5Stack StopWatch 的双程序个人工作台。开机可在 Dashboard 七屏与独立本地
