@@ -9,7 +9,7 @@ pause_before_close() {
   fi
 }
 
-echo "正在配置 M5 监控、Codex 状态、Typeless 和自动麦克风……"
+echo "正在配置 M5 监控、Codex 状态、Typeless 和按需麦克风……"
 echo
 
 if ! open -Ra Typeless; then
@@ -41,6 +41,6 @@ fi
 /usr/bin/python3 scripts/install.py --all
 
 echo
-echo "配置完成。M5 插线后会自动成为系统默认麦克风；Typeless 听写键为 Fn。"
+echo "配置完成。仅从手表启动 Typeless 时临时使用 M5 麦克风，结束后恢复；Typeless 听写键为 Fn。"
 echo "第一次使用若 macOS 询问麦克风或辅助功能权限，请选择允许。"
 pause_before_close "按任意键关闭……"

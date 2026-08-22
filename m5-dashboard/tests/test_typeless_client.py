@@ -8,13 +8,22 @@ from bridge.typeless_client import TypelessController
 
 
 class TypelessControllerTests(unittest.TestCase):
+    @staticmethod
+    def successful_run(command, **_kwargs):
+        stdout = "42\n" if len(command) > 1 and command[1] == "capture" else ""
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
     def controller(self, directory: str) -> TypelessController:
         helper = Path(directory) / "TypelessKeySender"
         helper.write_bytes(b"helper")
         helper.chmod(0o755)
+        audio_helper = Path(directory) / "m5_audio_input"
+        audio_helper.write_bytes(b"audio helper")
+        audio_helper.chmod(0o755)
         return TypelessController(
             {
                 "helper_path": str(helper),
+                "audio_helper_path": str(audio_helper),
                 "shortcut": "ctrl-cmd-shift-space",
                 "command_timeout_seconds": 4,
             }
@@ -23,30 +32,32 @@ class TypelessControllerTests(unittest.TestCase):
     def test_start_does_not_reopen_running_typeless_and_toggles_shortcut(self):
         with tempfile.TemporaryDirectory() as directory:
             controller = self.controller(directory)
-            completed = subprocess.CompletedProcess([], 0, "", "")
             with mock.patch.object(controller, "_is_running", return_value=True), mock.patch(
-                "bridge.typeless_client.subprocess.run", return_value=completed
+                "bridge.typeless_client.subprocess.run", side_effect=self.successful_run
             ) as run:
                 state = controller.perform("start")
             self.assertEqual(state, {"connected": True, "active": True})
             self.assertEqual(
-                run.call_args_list[0].args[0],
+                run.call_args_list[1].args[0],
                 [str(controller.helper), "ctrl-cmd-shift-space"],
+            )
+            self.assertEqual(
+                run.call_args_list[0].args[0],
+                [str(controller.audio_helper), "capture"],
             )
 
     def test_start_waits_for_a_new_typeless_process_before_sending_shortcut(self):
         with tempfile.TemporaryDirectory() as directory:
             controller = self.controller(directory)
-            completed = subprocess.CompletedProcess([], 0, "", "")
             with mock.patch.object(
                 controller, "_is_running", side_effect=[False, False, True]
             ), mock.patch(
-                "bridge.typeless_client.subprocess.run", return_value=completed
+                "bridge.typeless_client.subprocess.run", side_effect=self.successful_run
             ) as run, mock.patch("bridge.typeless_client.time.sleep") as sleep:
                 controller.perform("start")
-            self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/open", "-gj", "-a", "Typeless"])
+            self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/open", "-gj", "-a", "Typeless"])
             self.assertEqual(
-                run.call_args_list[1].args[0],
+                run.call_args_list[2].args[0],
                 [str(controller.helper), "ctrl-cmd-shift-space"],
             )
             self.assertIn(mock.call(controller.startup_delay), sleep.call_args_list)
@@ -54,13 +65,16 @@ class TypelessControllerTests(unittest.TestCase):
     def test_successful_start_then_stop_uses_the_same_typeless_toggle(self):
         with tempfile.TemporaryDirectory() as directory:
             controller = self.controller(directory)
-            completed = subprocess.CompletedProcess([], 0, "", "")
             with mock.patch.object(controller, "_is_running", return_value=True), mock.patch(
-                "bridge.typeless_client.subprocess.run", return_value=completed
+                "bridge.typeless_client.subprocess.run", side_effect=self.successful_run
             ) as run:
                 self.assertTrue(controller.perform("start")["active"])
                 self.assertFalse(controller.perform("stop")["active"])
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 4)
+            self.assertEqual(
+                run.call_args_list[-1].args[0],
+                [str(controller.audio_helper), "restore", "42"],
+            )
 
     def test_installed_app_helper_reports_its_own_exit_status(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -71,21 +85,24 @@ class TypelessControllerTests(unittest.TestCase):
             helper.parent.mkdir(parents=True)
             helper.write_bytes(b"helper")
             helper.chmod(0o755)
+            audio_helper = Path(directory) / "m5_audio_input"
+            audio_helper.write_bytes(b"audio helper")
+            audio_helper.chmod(0o755)
             controller = TypelessController(
                 {
                     "helper_path": str(helper),
+                    "audio_helper_path": str(audio_helper),
                     "shortcut": "ctrl-cmd-shift-space",
                 }
             )
-            completed = subprocess.CompletedProcess([], 0, "", "")
             with mock.patch.object(
                 controller, "_is_running", return_value=True
             ), mock.patch(
-                "bridge.typeless_client.subprocess.run", return_value=completed
+                "bridge.typeless_client.subprocess.run", side_effect=self.successful_run
             ) as run:
                 controller.perform("start")
             self.assertEqual(
-                run.call_args_list[0].args[0],
+                run.call_args_list[1].args[0],
                 [str(helper), "ctrl-cmd-shift-space"],
             )
 
@@ -104,12 +121,40 @@ class TypelessControllerTests(unittest.TestCase):
     def test_accessibility_failure_is_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             controller = self.controller(directory)
-            denied = subprocess.CompletedProcess([], 70, "", "accessibility_trusted=false")
+            def denied_then_restore(command, **kwargs):
+                if len(command) > 1 and command[1] == "capture":
+                    return self.successful_run(command, **kwargs)
+                if len(command) > 1 and command[1] == "restore":
+                    return self.successful_run(command, **kwargs)
+                return subprocess.CompletedProcess(command, 70, "", "accessibility_trusted=false")
+
             with mock.patch.object(controller, "_is_running", return_value=True), mock.patch(
-                "bridge.typeless_client.subprocess.run", side_effect=[denied]
-            ):
+                "bridge.typeless_client.subprocess.run", side_effect=denied_then_restore
+            ) as run:
                 with self.assertRaisesRegex(ValueError, "Accessibility"):
                     controller.perform("start")
+            self.assertEqual(
+                run.call_args_list[-1].args[0],
+                [str(controller.audio_helper), "restore", "42"],
+            )
+
+    def test_failed_typeless_launch_restores_the_previous_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = self.controller(directory)
+            with mock.patch.object(
+                controller, "_ensure_ready", side_effect=ValueError("launch failed")
+            ), mock.patch(
+                "bridge.typeless_client.subprocess.run", side_effect=self.successful_run
+            ) as run:
+                with self.assertRaisesRegex(ValueError, "launch failed"):
+                    controller.perform("start")
+            self.assertEqual(
+                [call.args[0] for call in run.call_args_list],
+                [
+                    [str(controller.audio_helper), "capture"],
+                    [str(controller.audio_helper), "restore", "42"],
+                ],
+            )
 
     def test_unknown_shortcut_and_action_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "unsupported Typeless shortcut"):

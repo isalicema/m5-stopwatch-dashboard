@@ -20,7 +20,7 @@ class InstallTests(unittest.TestCase):
     def setUp(self):
         self.installer = load_installer()
 
-    def test_typeless_uses_system_default_and_stopwatch_shortcuts(self):
+    def test_typeless_follows_session_selected_default_and_stopwatch_shortcuts(self):
         settings = {
             "microphoneDevices": [
                 {
@@ -98,6 +98,10 @@ class InstallTests(unittest.TestCase):
             self.assertIn("Alice Writing", installed["obsidian"]["exclude_names"])
             self.assertEqual(installed["server"]["api_token"], "generated-local-token_123456")
             self.assertTrue(installed["server"]["usb_enabled"])
+            self.assertEqual(
+                installed["typeless"]["audio_helper_path"],
+                str(target / "bin/m5_audio_input"),
+            )
             self.assertEqual(p["config"].stat().st_mode & 0o777, 0o600)
 
     def test_copy_app_preserves_an_existing_private_token(self):
@@ -149,6 +153,27 @@ class InstallTests(unittest.TestCase):
 
             self.assertEqual(helper.read_bytes(), b"compiled")
             self.assertTrue(os.access(helper, os.X_OK))
+
+    def test_session_audio_install_removes_the_legacy_global_agent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            launch_file = root / "com.local.m5dashboard.audio-input.plist"
+            launch_file.write_text("legacy", encoding="utf-8")
+            p = {
+                "audio_helper": root / "m5_audio_input",
+                "audio_launch_agent": launch_file,
+            }
+            with mock.patch.object(
+                self.installer, "_install_audio_helper_binary"
+            ) as install, mock.patch.object(
+                self.installer.subprocess, "run", return_value=mock.Mock(returncode=0)
+            ) as run:
+                self.installer.install_session_audio_helper(p)
+            self.assertFalse(launch_file.exists())
+            install.assert_called_once_with(p)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertIn("bootout", commands[0])
+            self.assertEqual(commands[1], [str(p["audio_helper"]), "release"])
 
     def test_typeless_key_helper_builds_as_a_stable_app_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:

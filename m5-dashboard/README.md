@@ -109,6 +109,11 @@ python3 scripts/install.py --launch-agent
 python3 scripts/install.py --all
 ```
 
+StopWatch 插着 USB 时不会长期占用系统默认输入。只有从第 5 页开始 Typeless 听写时，
+Bridge 才会记住当前麦克风并临时切换到 `M5 StopWatch Mic`（兼容早期名称
+`TinyUSB UAC1`）；手表结束听写或启动失败后会恢复原输入设备。通过键盘或其他方式启动
+Typeless 时，仍使用 Mac 原本的默认麦克风。
+
 首次执行 `--launch-agent` 或 `--all` 时，安装器会为缺少有效 Token 的本机配置自动生成
 随机 Token，并以 `0600` 权限保存。连接 StopWatch 后，设备会通过物理 USB CDC 自动配对
 并把 Token 写入 NVS；不需要手机热点，也不需要先配置 Wi-Fi。设备最多保留两台 Mac 的
@@ -160,7 +165,8 @@ Mode，只写应用分区，不执行 `erase_flash`。
 均在线时才显示 `READY`；未插线显示 `NO USB`，已插线但 Mac 尚未完成 Bridge 鉴权时
 显示两行 `NO / BRIDGE`。两组文案均使用补齐字符的原生 80 px Noto Bold 字体，不缩放、
 不回退到缺字字体。不可用状态不会向 Mac 发送 Typeless 启动动作，录音中拔线则会
-主动结束当前听写会话。
+主动结束当前听写会话。M5 麦克风只在这段由手表发起的会话内临时成为系统默认输入；
+停止后会恢复开始前的输入设备，不影响其他语音产品和项目。
 
 ## 页面
 

@@ -91,6 +91,9 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
         p.get("typeless_helper")
         or p["target"] / "TypelessKeySender.app/Contents/MacOS/TypelessKeySender"
     )
+    typeless["audio_helper_path"] = str(
+        p.get("audio_helper") or p["target"] / "bin/m5_audio_input"
+    )
     typeless.setdefault("shortcut", "ctrl-cmd-shift-space")
     typeless.setdefault("command_timeout_seconds", 5)
     typeless.setdefault("startup_delay_seconds", 1.0)
@@ -703,35 +706,35 @@ def _install_audio_helper_binary(p: Dict[str, Path]) -> None:
     helper.chmod(0o755)
 
 
-def install_audio_agent(p: Dict[str, Path]) -> None:
-    helper = p["audio_helper"]
-    _install_audio_helper_binary(p)
+def install_session_audio_helper(p: Dict[str, Path]) -> None:
+    """Replace the legacy global selector with an on-demand session helper."""
     launch_file = p["audio_launch_agent"]
-    launch_file.parent.mkdir(parents=True, exist_ok=True)
-    _backup(launch_file)
-    logs = p["target"] / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "Label": AUDIO_LAUNCH_LABEL,
-        "ProgramArguments": [str(helper), "--watch"],
-        "RunAtLoad": True,
-        "KeepAlive": True,
-        "ThrottleInterval": 10,
-        "StandardOutPath": str(logs / "audio-input.log"),
-        "StandardErrorPath": str(logs / "audio-input-error.log"),
-    }
-    with launch_file.open("wb") as target:
-        plistlib.dump(payload, target, sort_keys=True)
-    _load_service(AUDIO_LAUNCH_LABEL, launch_file)
-    print("Installed automatic M5 microphone selector: %s" % launch_file)
+    domain = "gui/%d" % os.getuid()
+    service = "%s/%s" % (domain, AUDIO_LAUNCH_LABEL)
+    subprocess.run(
+        ["launchctl", "bootout", service],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if launch_file.exists():
+        launch_file.unlink()
+    _install_audio_helper_binary(p)
+    subprocess.run(
+        [str(p["audio_helper"]), "release"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    print("Installed on-demand M5 microphone session helper: %s" % p["audio_helper"])
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Install the M5 Dashboard bridge integration")
     parser.add_argument("--hooks", action="store_true", help="install global read-only Codex status hooks")
     parser.add_argument("--launch-agent", action="store_true", help="install the macOS startup plist")
-    parser.add_argument("--typeless", action="store_true", help="configure Typeless and automatic M5 audio input")
-    parser.add_argument("--all", action="store_true", help="install bridge, hooks, Typeless, and audio selector")
+    parser.add_argument("--typeless", action="store_true", help="configure Typeless and on-demand M5 audio input")
+    parser.add_argument("--all", action="store_true", help="install bridge, hooks, Typeless, and session audio helper")
     parser.add_argument(
         "--add-peer-from-usage", action="store_true",
         help="add the existing LAN usage host as a live activity peer",
@@ -770,9 +773,12 @@ def main() -> None:
     if args.launch_agent or args.all:
         install_launch_agent(p)
     if args.typeless or args.all:
+        copy_app(p)
         configure_typeless(p)
         install_typeless_key_sender(p)
-        install_audio_agent(p)
+        install_session_audio_helper(p)
+        if not args.all and p["launch_agent"].exists():
+            _load_service(LAUNCH_LABEL, p["launch_agent"])
         subprocess.run(["/usr/bin/open", "-a", "Typeless"], check=False)
         request_typeless_accessibility(p)
 

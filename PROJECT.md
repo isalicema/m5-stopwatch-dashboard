@@ -873,6 +873,16 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
   `/dev/cu.usbmodem2101` 恢复为 `/dev/cu.usbmodemM5DASHMIC31`，Bridge 健康检查返回
   `{"ok":true}`，日志确认重新读取重启诊断并完成 USB 鉴权。软件、烧录、Flash 回读与传输
   链路验证完成；32 px 秒数的整体感和 USB 充电时深色电池的可见性待 Alice 实机目视确认。
+- Alice 确认个人 Mac 自带麦克风，StopWatch 不能沿用好友无内置麦克风环境中的“USB 插线后
+  永久设为系统默认输入”策略。Mac 集成已改为会话级所有权：从手表第 5 屏开始听写前记录
+  当前输入并临时切到 StopWatch，结束或启动失败后恢复；键盘或其他产品自行唤醒 Typeless
+  时不改系统输入。安装器会停用并删除旧 `com.local.m5dashboard.audio-input` 常驻监听，迁移
+  时若默认仍遗留在 M5，则优先释放到内置输入。音频助手同时兼容早期 CoreAudio 名称
+  `TinyUSB UAC1` 与当前固件名称 `M5 StopWatch Mic`。C 助手无警告编译、161 项 Python 全套
+  回归通过；Mac 端已部署，旧服务确认停止、Bridge 确认运行。实机助手验证记录原设备 ID
+  `101`、临时 M5 设备 ID `187`，两者不同，随后恢复返回 0。本轮无需重刷固件。Alice 随后
+  完成端到端真机验收：系统麦克风日常录入正常，手表发起 Stopwatch + Typeless 时可顺利
+  切到设备麦克风，结束后系统麦克风恢复正常；本项实机 PASS。
 
 ## 回家后的首次连接顺序
 

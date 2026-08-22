@@ -12,10 +12,11 @@ ACTIONS = {"start", "stop"}
 
 
 class TypelessController:
-    """Open Typeless and toggle dictation through the trusted native helper."""
+    """Run a Stopwatch-owned Typeless session without stealing the Mac mic."""
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self.helper = Path(str(config.get("helper_path") or "")).expanduser()
+        self.audio_helper = Path(str(config.get("audio_helper_path") or "")).expanduser()
         self.shortcut = str(config.get("shortcut") or "ctrl-cmd-shift-space")
         if self.shortcut not in SHORTCUTS:
             raise ValueError("unsupported Typeless shortcut: %s" % self.shortcut)
@@ -28,6 +29,7 @@ class TypelessController:
         # commands. Track only shortcuts successfully sent by this controller
         # so a lost start can never turn a later stop into an accidental start.
         self.active = False
+        self.previous_input: str | None = None
 
     def _is_running(self) -> bool:
         completed = subprocess.run(
@@ -63,6 +65,48 @@ class TypelessController:
         # it hides a later Accessibility denial and caused a false HTTP 200.
         return [str(self.helper), self.shortcut]
 
+    def _capture_audio_input(self) -> str:
+        if not self.audio_helper.is_file() or not self.audio_helper.stat().st_mode & 0o111:
+            raise ValueError("M5 audio input helper is not installed")
+        completed = subprocess.run(
+            [str(self.audio_helper), "capture"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
+        device = completed.stdout.strip()
+        if completed.returncode != 0 or not device.isdecimal():
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise ValueError(detail or "M5 microphone is unavailable")
+        return device
+
+    def _restore_audio_input(self, device: str) -> None:
+        completed = subprocess.run(
+            [str(self.audio_helper), "restore", device],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise ValueError(detail or "previous microphone could not be restored")
+
+    def _send_shortcut(self) -> None:
+        completed = subprocess.run(
+            self._shortcut_command(),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
+        if completed.returncode == 70:
+            raise ValueError("Typeless key helper needs macOS Accessibility permission")
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise ValueError(detail or "Typeless shortcut failed")
+
     def perform(self, action: str) -> Dict[str, Any]:
         if action not in ACTIONS:
             raise ValueError("unsupported Typeless action: %s" % action)
@@ -74,19 +118,29 @@ class TypelessController:
                 return {"connected": self._is_running(), "active": True}
             if action == "stop" and not self.active:
                 return {"connected": self._is_running(), "active": False}
-            self._ensure_ready()
-            completed = subprocess.run(
-                self._shortcut_command(),
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
-        if completed.returncode == 70:
-            raise ValueError("Typeless key helper needs macOS Accessibility permission")
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip()
-            raise ValueError(detail or "Typeless shortcut failed")
-        self.active = action == "start"
+            if action == "start":
+                previous = self._capture_audio_input()
+                try:
+                    self._ensure_ready()
+                    self._send_shortcut()
+                except Exception:
+                    self._restore_audio_input(previous)
+                    raise
+                self.previous_input = previous
+                self.active = True
+            else:
+                shortcut_error: Exception | None = None
+                try:
+                    self._send_shortcut()
+                except Exception as exc:
+                    shortcut_error = exc
+                try:
+                    if self.previous_input is not None:
+                        self._restore_audio_input(self.previous_input)
+                finally:
+                    self.previous_input = None
+                    self.active = False
+                if shortcut_error is not None:
+                    raise shortcut_error
         print("Typeless %s shortcut sent" % action, flush=True)
         return {"connected": True, "active": self.active}

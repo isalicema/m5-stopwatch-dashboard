@@ -103,6 +103,7 @@
   "typeless": {
     "enabled": true,
     "helper_path": "~/Library/Application Support/M5Dashboard/TypelessKeySender.app/Contents/MacOS/TypelessKeySender",
+    "audio_helper_path": "~/Library/Application Support/M5Dashboard/bin/m5_audio_input",
     "shortcut": "ctrl-cmd-shift-space",
     "command_timeout_seconds": 5,
     "startup_delay_seconds": 1.0
