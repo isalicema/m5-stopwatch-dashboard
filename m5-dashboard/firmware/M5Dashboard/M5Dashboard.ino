@@ -203,6 +203,8 @@ bool bridgeOnline = false;
 bool usbBridgeOnline = false;
 bool configMode = false;
 bool discoveryUdpStarted = false;
+bool completionFetchPending = false;
+uint32_t lastCompletionHintAt = 0;
 bool configHoldTriggered = false;
 int currentPage = 0;
 constexpr int pageCount = 7;
@@ -4946,10 +4948,36 @@ void processDiscoveryResponses() {
             activeBridgePort = static_cast<uint16_t>(discoveredPort);
           }
         }
+      } else {
+        const char completionPrefix[] = "M5DASH_EVENT_V1|completion|";
+        String sender = discoveryUdp.remoteIP().toString();
+        if (strncmp(buffer, completionPrefix, strlen(completionPrefix)) == 0 &&
+            sender == activeBridgeHost &&
+            (settings.token.length() > 0 || settings.token2.length() > 0) &&
+            static_cast<uint32_t>(millis() - lastCompletionHintAt) >= 200) {
+          lastCompletionHintAt = millis();
+          completionFetchPending = true;
+        }
       }
     }
     packetSize = discoveryUdp.parsePacket();
   }
+}
+
+void updateCompletionFetchHint() {
+  if (!completionFetchPending) return;
+  uint32_t now = millis();
+  if (usbBridgeOnline) {
+    if (usbReplyPending(now, lastUsbRequestAt, kUsbReplyGraceMs)) return;
+    completionFetchPending = false;
+    lastUsbRequestAt = now;
+    sendUsbStateRequest();
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED || activeBridgeHost.length() == 0) return;
+  completionFetchPending = false;
+  lastFetchAt = now;
+  if (!fetchState()) bridgeOnline = false;
 }
 
 void updateBridgeDiscovery() {
@@ -4974,6 +5002,7 @@ void updateBridgeDiscovery() {
 void resetBridgeForNetworkChange() {
   bridgeOnline = false;
   haveData = false;
+  completionFetchPending = false;
   activeTokenSlot = -1;
   lastBridgeHttpStatus = 0;
   // A fixed address is a work-network fallback. Home must keep using discovery
@@ -6305,6 +6334,7 @@ void loop() {
     updateUsbBridge();
     if (settings.ssid.length() > 0 || settings.ssid2.length() > 0) connectWifi();
     updateBridgeDiscovery();
+    updateCompletionFetchHint();
     uint32_t now = millis();
     if (now - lastFetchAt >= dashboardStateRefreshInterval() &&
         !usbReplyPending(now, lastUsbRequestAt, kUsbReplyGraceMs)) {
@@ -6341,6 +6371,7 @@ void loop() {
     updateUsbBridge();
     if (settings.ssid.length() > 0 || settings.ssid2.length() > 0) connectWifi();
     updateBridgeDiscovery();
+    updateCompletionFetchHint();
 
     auto shellTouch = M5.Touch.getDetail();
     updateAppShellTouch(shellTouch);
@@ -6459,6 +6490,7 @@ void loop() {
     return;
   }
   updateBridgeDiscovery();
+  updateCompletionFetchHint();
   markProviderLoopDiagnostic(633);
 
   auto touch = M5.Touch.getDetail();

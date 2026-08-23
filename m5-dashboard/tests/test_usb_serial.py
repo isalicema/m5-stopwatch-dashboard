@@ -160,6 +160,11 @@ class UsbSerialProtocolTests(unittest.TestCase):
             response = os.read(master_fd, 4096)
             self.assertTrue(response.startswith(USB_RESPONSE_PREFIX))
             self.assertEqual(json.loads(response[len(USB_RESPONSE_PREFIX) :]), {"ok": True})
+            self.assertEqual(responder.notify_state(), {"usb_pushed": True})
+            readable, _, _ = select.select([master_fd], [], [], 2)
+            self.assertTrue(readable)
+            pushed = os.read(master_fd, 4096)
+            self.assertTrue(pushed.startswith(USB_RESPONSE_PREFIX))
         finally:
             responder.stop()
             thread.join(timeout=2)

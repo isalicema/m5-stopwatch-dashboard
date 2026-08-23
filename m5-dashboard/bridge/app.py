@@ -15,7 +15,7 @@ from .ai_hotspots import AIHotspotMonitor
 from .ai_usage_client import AIUsageMonitor
 from .claude_client import ClaudeMonitor
 from .codex_client import CodexMonitor
-from .discovery import DiscoveryResponder
+from .discovery import CompletionBeacon, DiscoveryResponder
 from .obsidian_dice import ObsidianDice
 from .ota import FirmwareCatalog
 from .peer_state import PeerStateMonitor, resolve_peer_auth
@@ -90,15 +90,44 @@ def dispatch_dashboard_action(
         return HTTPStatus.BAD_GATEWAY, {"ok": False, "error": str(exc)}
 
 
+def dispatch_completion_action(
+    path: str,
+    supplied_token: str,
+    api_token: str,
+    payload: Dict[str, Any],
+    callbacks: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]],
+) -> tuple[int, Dict[str, Any]]:
+    if not hmac.compare_digest(supplied_token, api_token):
+        return HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"}
+    prefix = "/api/internal/completion/"
+    provider = path.removeprefix(prefix) if path.startswith(prefix) else ""
+    callback = callbacks.get(provider)
+    if callback is None:
+        return HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"}
+    try:
+        result = callback(payload)
+        body = {"ok": True}
+        if isinstance(result, dict):
+            body.update(result)
+        return HTTPStatus.OK, body
+    except (OSError, TypeError, ValueError) as exc:
+        return HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)}
+
+
 def build_handler(
     state: DashboardState,
     api_token: str,
     ticktick_action: Optional[Callable[[str], Dict[str, Any]]] = None,
     action_callbacks: Optional[Dict[str, Callable[[], Dict[str, Any]]]] = None,
     ota_catalog: Optional[FirmwareCatalog] = None,
+    completion_callbacks: Optional[
+        Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]]
+    ] = None,
+    client_seen: Optional[Callable[[str], None]] = None,
 ) -> type[BaseHTTPRequestHandler]:
     seen_clients: set[str] = set()
     extra_actions = dict(action_callbacks or {})
+    completion_actions = dict(completion_callbacks or {})
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "M5Dashboard/0.1"
@@ -174,6 +203,8 @@ def build_handler(
                 self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
                 return
             client_ip = self.client_address[0]
+            if client_seen is not None:
+                client_seen(client_ip)
             if client_ip not in ("127.0.0.1", "::1") and client_ip not in seen_clients:
                 seen_clients.add(client_ip)
                 print("Dashboard client connected: %s" % client_ip, flush=True)
@@ -181,7 +212,23 @@ def build_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            if path.startswith("/api/ticktick/"):
+            if path.startswith("/api/internal/completion/"):
+                try:
+                    length = max(0, min(4096, int(self.headers.get("Content-Length", "0"))))
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(payload, dict):
+                        raise ValueError("completion body must be an object")
+                except (ValueError, json.JSONDecodeError):
+                    self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid json"})
+                    return
+                status, body = dispatch_completion_action(
+                    path,
+                    self.headers.get("X-Dashboard-Token", ""),
+                    api_token,
+                    payload,
+                    completion_actions,
+                )
+            elif path.startswith("/api/ticktick/"):
                 status, body = dispatch_ticktick_action(
                     path, self.headers.get("X-Dashboard-Token", ""), api_token, ticktick_action
                 )
@@ -228,6 +275,22 @@ def main(argv: Optional[list[str]] = None) -> None:
     dashboard = DashboardState(str(server_config.get("device_label") or "Air"), bool(peer_sources))
     workers: list[Any] = []
     action_callbacks: Dict[str, Callable[[], Dict[str, Any]]] = {}
+    completion_callbacks: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {}
+    completion_sinks: list[Callable[[str], Any]] = []
+    completion_beacon = CompletionBeacon()
+    completion_sinks.append(completion_beacon.notify)
+
+    def completed(
+        provider: str, monitor: Any, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        result = dashboard.add_completion(provider, payload)
+        monitor.wake()
+        for sink in completion_sinks:
+            try:
+                sink(provider)
+            except OSError:
+                continue
+        return {"provider": provider, "accepted": True, "completed_at": result["completed_at"]}
 
     ticktick_monitor: Optional[TickTickMonitor] = None
     if ticktick_config.get("enabled", True):
@@ -239,10 +302,16 @@ def main(argv: Optional[list[str]] = None) -> None:
         monitor = CodexMonitor(codex_config, dashboard.set_codex)
         monitor.start()
         workers.append(monitor)
+        completion_callbacks["codex"] = lambda payload, current=monitor: completed(
+            "codex", current, payload
+        )
     if claude_config.get("enabled", False):
         monitor = ClaudeMonitor(claude_config, dashboard.set_claude)
         monitor.start()
         workers.append(monitor)
+        completion_callbacks["claude"] = lambda payload, current=monitor: completed(
+            "claude", current, payload
+        )
     if weather_config.get("enabled", True):
         monitor = WeatherMonitor(weather_config, dashboard.set_weather)
         monitor.start()
@@ -286,6 +355,8 @@ def main(argv: Optional[list[str]] = None) -> None:
             ticktick_monitor.perform if ticktick_monitor is not None else None,
             action_callbacks,
             FirmwareCatalog(ota_config),
+            completion_callbacks,
+            completion_beacon.note_client,
         ),
     )
     if server_config.get("discovery_enabled", True):
@@ -310,6 +381,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         usb = UsbSerialResponder(usb_snapshot, usb_api_token, usb_action)
         usb.start()
         workers.append(usb)
+        completion_sinks.append(lambda _provider: usb.notify_state())
     stopped = threading.Event()
 
     def shutdown(*_: Any) -> None:

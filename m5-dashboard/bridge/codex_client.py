@@ -113,6 +113,40 @@ def load_hook_sessions(path: str) -> Dict[str, Dict[str, Any]]:
     return sessions if isinstance(sessions, dict) else {}
 
 
+def hook_completion_results(
+    hooks: Dict[str, Dict[str, Any]],
+    threads: List[Dict[str, Any]],
+    expose_titles: bool,
+    limit: int = 6,
+    now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Expose only product-level Codex notify completions, never JSONL guesses."""
+    current = now or datetime.now().astimezone()
+    if current.tzinfo is None:
+        current = current.astimezone()
+    day_start = datetime.combine(current.date(), datetime_time.min, tzinfo=current.tzinfo).timestamp()
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for thread in threads:
+        for key in (thread.get("id"), thread.get("sessionId")):
+            if key:
+                by_id[str(key)] = thread
+    output = []
+    for index, (session_id, session) in enumerate(hooks.items(), 1):
+        completed_at = int(session.get("completed_at") or 0)
+        if completed_at < day_start:
+            continue
+        thread = by_id.get(session_id, {})
+        output.append(
+            {
+                "id": str(session.get("completion_id") or session_id)[-32:],
+                "title": _safe_title(thread, expose_titles, index),
+                "completed_at": completed_at,
+            }
+        )
+    output.sort(key=lambda item: int(item["completed_at"]), reverse=True)
+    return output[: max(0, int(limit))]
+
+
 _USAGE_FIELDS = (
     "total_tokens",
     "input_tokens",
@@ -361,6 +395,7 @@ class CodexMonitor(threading.Thread):
         self.config = config
         self.on_state = on_state
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
         self._client: Optional[AppServerClient] = None
         self._local_activity = LocalCodexActivity(
             str(config.get("session_root") or "~/.codex/sessions"),
@@ -373,8 +408,18 @@ class CodexMonitor(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._wake_event.set()
         if self._client:
             self._client.close()
+
+    def wake(self) -> Dict[str, Any]:
+        """Interrupt the normal polling delay after a product completion hook."""
+        self._wake_event.set()
+        return {"provider": "codex", "woken": True}
+
+    def _wait(self, seconds: float) -> None:
+        self._wake_event.wait(seconds)
+        self._wake_event.clear()
 
     def _binary(self) -> str:
         configured = str(self.config.get("codex_binary") or "codex")
@@ -461,9 +506,9 @@ class CodexMonitor(threading.Thread):
                 int(self.config.get("working_stale_seconds", 21600)),
             )
             # Desktop Codex writes task_started/task_complete into its local
-            # JSONL even when the single notify hook belongs to another app.
-            # Preserve hooks when present, but synthesize the missing local
-            # working entry so the M5 animation works in either environment.
+            # JSONL even when lifecycle hooks do not fire. Keep using that
+            # source to fill the live working count; completion feedback is
+            # deliberately handled only by the product-level notify receipt.
             hook_working = sum(s["status"] == "working" for s in sessions)
             for index in range(max(0, self._local_activity.active_count() - hook_working)):
                 sessions.append(
@@ -483,8 +528,10 @@ class CodexMonitor(threading.Thread):
             transcripts = self._transcripts.snapshots(
                 bool(self.config.get("expose_transcript", False))
             )
-            results = self._transcripts.completed_today(
-                bool(self.config.get("expose_transcript", False))
+            results = hook_completion_results(
+                hook_sessions,
+                threads,
+                bool(self.config.get("expose_titles", False)),
             )
             active = {"working"}
             waiting = {"waiting_approval", "waiting_input"}
@@ -503,7 +550,7 @@ class CodexMonitor(threading.Thread):
                     "error": usage_error,
                 }
             )
-            self._stop_event.wait(thread_refresh)
+            self._wait(thread_refresh)
 
     def run(self) -> None:
         delay = 2
@@ -522,8 +569,10 @@ class CodexMonitor(threading.Thread):
                         "transcripts": self._transcripts.snapshots(
                             bool(self.config.get("expose_transcript", False))
                         ),
-                        "results": self._transcripts.completed_today(
-                            bool(self.config.get("expose_transcript", False))
+                        "results": hook_completion_results(
+                            load_hook_sessions(str(self.config.get("hook_state_path") or "")),
+                            [],
+                            False,
                         ),
                         "limits": [],
                         "usage": {},
@@ -534,5 +583,5 @@ class CodexMonitor(threading.Thread):
                 if self._client:
                     self._client.close()
                     self._client = None
-                self._stop_event.wait(delay)
+                self._wait(delay)
                 delay = min(delay * 2, 30)

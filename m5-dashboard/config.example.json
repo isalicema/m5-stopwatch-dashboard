@@ -130,6 +130,7 @@
     "peer_usage_sources": []
   },
   "claude": {
+    "hook_state_path": "~/Library/Application Support/M5Dashboard/claude_hooks.json",
     "enabled": true,
     "local_only": true,
     "refresh_seconds": 60,

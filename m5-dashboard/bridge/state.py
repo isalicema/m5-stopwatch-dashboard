@@ -176,6 +176,30 @@ class DashboardState:
         with self._lock:
             self._claude = copy.deepcopy(value)
 
+    def add_completion(self, provider: str, value: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge an authenticated Stop receipt before notifying the device."""
+        if provider not in {"codex", "claude"}:
+            raise ValueError("invalid completion provider")
+        completion_id = str(value.get("id") or "")[:64]
+        completed_at = max(0, int(value.get("completed_at") or 0))
+        if not completion_id or completed_at <= 0:
+            raise ValueError("invalid completion receipt")
+        title = str(value.get("title") or ("Codex" if provider == "codex" else "Claude"))[:36]
+        result = {"id": completion_id, "title": title, "completed_at": completed_at}
+        with self._lock:
+            target = self._codex if provider == "codex" else self._claude
+            existing = target.get("results") if isinstance(target.get("results"), list) else []
+            merged = [result]
+            merged.extend(
+                item
+                for item in existing
+                if isinstance(item, dict) and str(item.get("id") or "") != completion_id
+            )
+            merged.sort(key=lambda item: int(item.get("completed_at") or 0), reverse=True)
+            target["results"] = merged[:6]
+            target["updated_at"] = int(time.time())
+        return result
+
     def set_weather(self, value: Dict[str, Any]) -> None:
         with self._lock:
             self._weather = copy.deepcopy(value)

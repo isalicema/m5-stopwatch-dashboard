@@ -33,10 +33,13 @@ def paths() -> Dict[str, Path]:
         "installed_app": target / "app",
         "config": target / "config.json",
         "hooks": Path.home() / ".codex/hooks.json",
+        "claude_settings": Path.home() / ".claude/settings.json",
         "launch_agent": Path.home() / "Library/LaunchAgents" / (LAUNCH_LABEL + ".plist"),
         "audio_launch_agent": Path.home() / "Library/LaunchAgents" / (AUDIO_LAUNCH_LABEL + ".plist"),
         "typeless_settings": Path.home() / "Library/Application Support/Typeless/app-settings.json",
         "audio_helper": target / "bin/m5_audio_input",
+        "codex_notify_helper": target / "bin/M5CodexNotify",
+        "claude_notify_helper": target / "bin/M5ClaudeNotify",
         "typeless_helper": target / "TypelessKeySender.app/Contents/MacOS/TypelessKeySender",
         "typeless_helper_info": target / "TypelessKeySender.app/Contents/Info.plist",
     }
@@ -58,6 +61,18 @@ def copy_app(p: Dict[str, Path]) -> None:
     destination = p["installed_app"]
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copytree(p["project"] / "bridge", destination / "bridge", dirs_exist_ok=True)
+    notify_source = p["project"] / "mac/M5CodexNotify.sh"
+    if notify_source.is_file():
+        notify_target = p.get("codex_notify_helper") or p["target"] / "bin/M5CodexNotify"
+        notify_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(notify_source, notify_target)
+        notify_target.chmod(0o755)
+    claude_notify_source = p["project"] / "mac/M5ClaudeNotify.sh"
+    if claude_notify_source.is_file():
+        claude_notify_target = p.get("claude_notify_helper") or p["target"] / "bin/M5ClaudeNotify"
+        claude_notify_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(claude_notify_source, claude_notify_target)
+        claude_notify_target.chmod(0o755)
     source_config = p["project"] / "config.json"
     # Never replace this Mac's working token/cloud settings with a config
     # synced from another location. Seed the config only on a fresh install.
@@ -105,6 +120,7 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
     codex.setdefault("expose_transcript", False)
     codex.setdefault("transcript_refresh_seconds", 1)
     claude = config.setdefault("claude", {})
+    claude["hook_state_path"] = str(p["target"] / "claude_hooks.json")
     example_source = claude.get("source") if isinstance(claude.get("source"), dict) else {}
     if str(example_source.get("base_url") or "").startswith("http://IMAC-IP:"):
         claude.pop("source", None)
@@ -177,7 +193,8 @@ def _backup(path: Path) -> None:
 
 
 def _is_ours(handler: Dict[str, Any]) -> bool:
-    return "M5Dashboard" in str(handler.get("command") or "")
+    command = str(handler.get("command") or "")
+    return any(marker in command for marker in ("M5Dashboard", "M5CodexNotify", "M5ClaudeNotify"))
 
 
 def _load_service(label: str, launch_file: Path) -> None:
@@ -423,6 +440,40 @@ def install_hooks(p: Dict[str, Path]) -> None:
     hook_file.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("Installed Codex hooks: %s" % hook_file)
     print("Next: restart the desktop app and trust the new hooks in the hooks review UI.")
+
+
+def install_claude_completion_hook(p: Dict[str, Path]) -> None:
+    """Append M5 to Claude's existing Stop hook without replacing peon-ping."""
+    copy_app(p)
+    settings_file = p["claude_settings"]
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    if settings_file.exists():
+        try:
+            config = json.loads(settings_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit("Refusing to edit invalid %s: %s" % (settings_file, exc))
+        _backup(settings_file)
+    else:
+        config = {}
+    hooks = config.setdefault("hooks", {})
+    groups = hooks.setdefault("Stop", [])
+    cleaned = []
+    for group in groups:
+        handlers = [handler for handler in group.get("hooks", []) if not _is_ours(handler)]
+        if handlers:
+            updated = dict(group)
+            updated["hooks"] = handlers
+            cleaned.append(updated)
+    command = str(p.get("claude_notify_helper") or p["target"] / "bin/M5ClaudeNotify")
+    cleaned.append(
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": command, "timeout": 2, "async": True}],
+        }
+    )
+    hooks["Stop"] = cleaned
+    settings_file.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print("Installed Claude Stop completion hook beside existing handlers: %s" % settings_file)
 
 
 def install_launch_agent(p: Dict[str, Path]) -> None:
@@ -737,7 +788,14 @@ def install_session_audio_helper(p: Dict[str, Path]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Install the M5 Dashboard bridge integration")
-    parser.add_argument("--hooks", action="store_true", help="install global read-only Codex status hooks")
+    parser.add_argument(
+        "--hooks", action="store_true",
+        help="install Codex status hooks and the Claude completion hook",
+    )
+    parser.add_argument(
+        "--claude-hook", action="store_true",
+        help="append only the Claude Stop completion hook",
+    )
     parser.add_argument("--launch-agent", action="store_true", help="install the macOS startup plist")
     parser.add_argument("--typeless", action="store_true", help="configure Typeless and on-demand M5 audio input")
     parser.add_argument("--all", action="store_true", help="install bridge, hooks, Typeless, and session audio helper")
@@ -755,15 +813,20 @@ def main() -> None:
     )
     args = parser.parse_args()
     if not (
-        args.hooks or args.launch_agent or args.typeless or args.all
+        args.hooks or args.claude_hook or args.launch_agent or args.typeless or args.all
         or args.add_peer_from_usage or args.peer_node or args.peer_usb
     ):
         parser.error(
-            "choose --hooks, --launch-agent, --typeless, --all, "
+            "choose --hooks, --claude-hook, --launch-agent, --typeless, --all, "
             "--add-peer-from-usage, --peer-node, or --peer-usb"
         )
     if args.peer_node or args.peer_usb:
-        if any((args.hooks, args.launch_agent, args.typeless, args.all, args.add_peer_from_usage)):
+        if any(
+            (
+                args.hooks, args.claude_hook, args.launch_agent, args.typeless,
+                args.all, args.add_peer_from_usage,
+            )
+        ):
             parser.error("--peer-node and --peer-usb must be used by themselves")
         if args.peer_node and args.peer_usb:
             parser.error("choose only one of --peer-node or --peer-usb")
@@ -776,6 +839,9 @@ def main() -> None:
         configure_peer_from_usage(p)
     if args.hooks or args.all:
         install_hooks(p)
+        install_claude_completion_hook(p)
+    elif args.claude_hook:
+        install_claude_completion_hook(p)
     if args.launch_agent or args.all:
         install_launch_agent(p)
     if args.typeless or args.all:

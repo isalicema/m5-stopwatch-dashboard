@@ -1,6 +1,11 @@
 import unittest
 
-from bridge.app import build_handler, dispatch_dashboard_action, dispatch_ticktick_action
+from bridge.app import (
+    build_handler,
+    dispatch_completion_action,
+    dispatch_dashboard_action,
+    dispatch_ticktick_action,
+)
 
 
 class DashboardHttpTests(unittest.TestCase):
@@ -63,6 +68,31 @@ class DashboardHttpTests(unittest.TestCase):
             actions,
             ["ai-ack", "obsidian-roll", "typeless-start", "typeless-start-mac"],
         )
+
+    def test_authenticated_completion_is_dispatched_with_content_free_receipt(self):
+        receipts = []
+        payload = {"id": "turn-1", "title": "Codex", "completed_at": 123}
+        status, body = dispatch_completion_action(
+            "/api/internal/completion/codex",
+            "secret",
+            "secret",
+            payload,
+            {"codex": lambda value: receipts.append(value) or {"accepted": True}},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["accepted"])
+        self.assertEqual(receipts, [payload])
+
+    def test_completion_rejects_wrong_token(self):
+        status, body = dispatch_completion_action(
+            "/api/internal/completion/claude",
+            "wrong",
+            "secret",
+            {"id": "stop-1", "completed_at": 123},
+            {"claude": lambda _: {}},
+        )
+        self.assertEqual(status, 401)
+        self.assertFalse(body["ok"])
 
     def test_extra_action_rejects_wrong_token(self):
         status, body = dispatch_dashboard_action(

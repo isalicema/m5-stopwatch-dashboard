@@ -204,6 +204,23 @@ class UsbSerialResponder(threading.Thread):
         self.action = action
         self._stop_event = threading.Event()
         self._fd: Optional[int] = None
+        self._authenticated = False
+        self._write_lock = threading.Lock()
+
+    def _send(self, fd: int, payload: bytes) -> None:
+        with self._write_lock:
+            _write_all(fd, payload)
+
+    def notify_state(self) -> Dict[str, Any]:
+        """Push one fresh snapshot over an already authenticated USB session."""
+        fd = self._fd
+        if fd is None or not self._authenticated:
+            return {"usb_pushed": False}
+        try:
+            self._send(fd, build_response(self.snapshot()))
+            return {"usb_pushed": True}
+        except (OSError, ValueError):
+            return {"usb_pushed": False}
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -220,6 +237,7 @@ class UsbSerialResponder(threading.Thread):
         self._fd = fd
         buffer = bytearray()
         authenticated = False
+        self._authenticated = False
         diagnostic_lines_remaining = 0
         try:
             _configure_port(fd)
@@ -256,29 +274,30 @@ class UsbSerialResponder(threading.Thread):
                             flush=True,
                         )
                     elif device_id is not None:
-                        _write_all(fd, build_pair_response(self.api_token))
+                        self._send(fd, build_pair_response(self.api_token))
                         print("M5 USB dashboard paired with %s" % device_id, flush=True)
                     elif action is not None and self.action is not None:
                         print("M5 USB action received %s" % action, flush=True)
                         try:
                             self.action(action)
-                            _write_all(fd, build_response(self.snapshot()))
+                            self._send(fd, build_response(self.snapshot()))
                             print("M5 USB action completed %s" % action, flush=True)
                         except (OSError, ValueError) as exc:
                             print(
                                 "M5 USB action failed %s: %s" % (action, exc),
                                 flush=True,
                             )
-                            _write_all(fd, b"M5DASH_USB_V1|ERR|action\n")
+                            self._send(fd, b"M5DASH_USB_V1|ERR|action\n")
                     elif parse_request(line, self.api_token):
                         if not authenticated:
                             print("M5 USB dashboard client authenticated", flush=True)
                             authenticated = True
-                        _write_all(fd, build_response(self.snapshot()))
+                            self._authenticated = True
+                        self._send(fd, build_response(self.snapshot()))
                     elif line.startswith((USB_REQUEST_PREFIX, USB_ACTION_PREFIX)):
                         if line.startswith(USB_ACTION_PREFIX):
                             print("M5 USB action rejected", flush=True)
-                        _write_all(fd, USB_ERROR_RESPONSE)
+                        self._send(fd, USB_ERROR_RESPONSE)
                     elif diagnostic_trigger(line):
                         diagnostic_lines_remaining = DIAGNOSTIC_FOLLOW_LINES
                         print("M5 USB panic: %s" % diagnostic_text(line), flush=True)
@@ -292,6 +311,7 @@ class UsbSerialResponder(threading.Thread):
         finally:
             if self._fd == fd:
                 self._fd = None
+            self._authenticated = False
             try:
                 os.close(fd)
             except OSError:

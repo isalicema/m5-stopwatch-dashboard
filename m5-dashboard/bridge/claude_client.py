@@ -4,11 +4,57 @@ import json
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .codex_client import fetch_peer_stats
 from .local_activity import LocalClaudeActivity
 from .transcript import LocalClaudeTranscripts
+
+
+def load_hook_sessions(path: str) -> Dict[str, Dict[str, Any]]:
+    if not path:
+        return {}
+    try:
+        payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    sessions = payload.get("sessions") if isinstance(payload, dict) else {}
+    return sessions if isinstance(sessions, dict) else {}
+
+
+def hook_completion_results(
+    hooks: Dict[str, Dict[str, Any]],
+    transcript_candidates: list[Dict[str, Any]],
+    expose_titles: bool,
+    limit: int = 6,
+    now: Optional[datetime] = None,
+) -> list[Dict[str, Any]]:
+    """Expose Claude completion only when the official Stop hook fired."""
+    current = now or datetime.now().astimezone()
+    if current.tzinfo is None:
+        current = current.astimezone()
+    day_start = current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    titles = {
+        str(candidate.get("id") or ""): str(candidate.get("title") or "")
+        for candidate in transcript_candidates
+    }
+    output = []
+    for index, (session_id, session) in enumerate(hooks.items(), 1):
+        completed_at = int(session.get("completed_at") or 0)
+        if completed_at < day_start:
+            continue
+        short_id = session_id[-8:]
+        title = titles.get(short_id) if expose_titles else ""
+        output.append(
+            {
+                "id": str(session.get("completion_id") or session_id)[-32:],
+                "title": title or "Claude %d" % index,
+                "completed_at": completed_at,
+            }
+        )
+    output.sort(key=lambda item: int(item["completed_at"]), reverse=True)
+    return output[: max(0, int(limit))]
 
 
 def _nonnegative_int(value: Any) -> int:
@@ -158,6 +204,7 @@ class ClaudeMonitor(threading.Thread):
         self.config = config
         self.on_state = on_state
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
         source = config.get("source") if isinstance(config.get("source"), dict) else {}
         self._local_activity = LocalClaudeActivity(
             str(config.get("activity_projects_root") or source.get("projects_root") or "~/.claude/projects"),
@@ -170,6 +217,16 @@ class ClaudeMonitor(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._wake_event.set()
+
+    def wake(self) -> Dict[str, Any]:
+        """Interrupt the normal polling delay after Claude's Stop hook."""
+        self._wake_event.set()
+        return {"provider": "claude", "woken": True}
+
+    def _wait(self, seconds: float) -> None:
+        self._wake_event.wait(seconds)
+        self._wake_event.clear()
 
     def run(self) -> None:
         refresh_seconds = max(15, int(self.config.get("refresh_seconds", 60)))
@@ -194,6 +251,7 @@ class ClaudeMonitor(threading.Thread):
                     transcripts = self._transcripts.snapshots(
                         bool(self.config.get("expose_transcript", False))
                     )
+                    title_candidates = self._transcripts.completed_today(True)
                     failed.update(
                         {
                             "connected": False,
@@ -201,8 +259,10 @@ class ClaudeMonitor(threading.Thread):
                                 _nonnegative_int(failed.get("active_count")), len(transcripts)
                             ),
                             "transcripts": transcripts,
-                            "results": self._transcripts.completed_today(
-                                bool(self.config.get("expose_transcript", False))
+                            "results": hook_completion_results(
+                                load_hook_sessions(str(self.config.get("hook_state_path") or "")),
+                                title_candidates,
+                                bool(self.config.get("expose_transcript", False)),
                             ),
                             "error": str(exc)[:160],
                         }
@@ -216,14 +276,17 @@ class ClaudeMonitor(threading.Thread):
                 transcripts = self._transcripts.snapshots(
                     bool(self.config.get("expose_transcript", False))
                 )
+                title_candidates = self._transcripts.completed_today(True)
                 current["active_count"] = max(
                     _nonnegative_int(current.get("active_count")),
                     self._local_activity.active_count(),
                     len(transcripts),
                 )
                 current["transcripts"] = transcripts
-                current["results"] = self._transcripts.completed_today(
-                    bool(self.config.get("expose_transcript", False))
+                current["results"] = hook_completion_results(
+                    load_hook_sessions(str(self.config.get("hook_state_path") or "")),
+                    title_candidates,
+                    bool(self.config.get("expose_transcript", False)),
                 )
                 self.on_state(current)
-            self._stop_event.wait(activity_refresh_seconds)
+            self._wait(activity_refresh_seconds)

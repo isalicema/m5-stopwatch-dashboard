@@ -4,17 +4,71 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from bridge.codex_client import (
+    CodexMonitor,
     collect_local_daily_usage,
     format_rate_limits,
+    hook_completion_results,
     merge_daily_usage,
     merge_sessions,
     normalize_peer_daily_usage,
 )
+from bridge.codex_hook import notify_bridge
 
 
 class CodexMergeTests(unittest.TestCase):
+    def test_completion_wake_interrupts_poll_delay(self):
+        monitor = CodexMonitor({}, lambda _: None)
+        self.assertEqual(monitor.wake(), {"provider": "codex", "woken": True})
+        self.assertTrue(monitor._wake_event.is_set())
+        monitor._wait(10)
+        self.assertFalse(monitor._wake_event.is_set())
+
+    def test_hook_notifies_authenticated_local_bridge(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "config.json"
+            config.write_text(
+                json.dumps({"server": {"api_token": "secret", "port": 9999}}),
+                encoding="utf-8",
+            )
+            response = mock.MagicMock()
+            response.__enter__.return_value.status = 200
+            with mock.patch.dict(os.environ, {"M5_DASH_CONFIG": str(config)}), mock.patch(
+                "bridge.codex_hook.urllib.request.urlopen", return_value=response
+            ) as request:
+                self.assertTrue(
+                    notify_bridge({"id": "turn-1", "title": "Codex", "completed_at": 123})
+                )
+            sent = request.call_args.args[0]
+            self.assertEqual(sent.full_url, "http://127.0.0.1:9999/api/internal/completion/codex")
+            self.assertEqual(sent.get_header("X-dashboard-token"), "secret")
+            self.assertEqual(
+                json.loads(sent.data),
+                {"id": "turn-1", "title": "Codex", "completed_at": 123},
+            )
+
+    def test_completion_results_only_use_notify_receipts(self):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        sessions = {
+            "thr_done": {
+                "status": "idle",
+                "completed_at": int(now.timestamp()),
+                "completion_id": "turn_done",
+            },
+            "thr_tool": {"status": "working", "last_event": "PostToolUse"},
+            "thr_stop": {"status": "idle", "turn_stopped_at": int(now.timestamp())},
+        }
+        threads = [{"id": "thr_done", "name": "完成动画修复"}]
+
+        result = hook_completion_results(sessions, threads, True, now=now)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], "turn_done")
+        self.assertEqual(result[0]["title"], "完成动画修复")
+        self.assertEqual(result[0]["completed_at"], int(now.timestamp()))
+
     def test_hides_titles_by_default(self):
         sessions = {"thr_123": {"status": "working", "last_event_at": 100}}
         threads = [{"id": "thr_123", "name": "Private project title"}]

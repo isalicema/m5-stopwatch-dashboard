@@ -87,6 +87,9 @@ class InstallTests(unittest.TestCase):
                 str(target / "ticktick-daily-focus.json"),
             )
             self.assertEqual(installed["codex"]["hook_state_path"], str(target / "codex_hooks.json"))
+            self.assertEqual(
+                installed["claude"]["hook_state_path"], str(target / "claude_hooks.json")
+            )
             self.assertFalse(installed["codex"]["expose_transcript"])
             self.assertFalse(installed["claude"]["expose_transcript"])
             self.assertTrue(installed["ai_usage"]["enabled"])
@@ -138,6 +141,106 @@ class InstallTests(unittest.TestCase):
             installed = json.loads(config.read_text(encoding="utf-8"))
             self.assertEqual(installed["server"]["api_token"], "existing-private-token_123456")
             generate.assert_not_called()
+
+    def test_copy_app_installs_codex_notify_helper_as_executable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "package"
+            target = root / "installed"
+            (project / "bridge").mkdir(parents=True)
+            (project / "bridge/__init__.py").write_text("", encoding="utf-8")
+            (project / "mac").mkdir()
+            source = project / "mac/M5CodexNotify.sh"
+            source.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+            (project / "config.example.json").write_text("{}\n", encoding="utf-8")
+            helper = target / "bin/M5CodexNotify"
+            p = {
+                "project": project,
+                "target": target,
+                "installed_app": target / "app",
+                "config": target / "config.json",
+                "codex_notify_helper": helper,
+            }
+
+            self.installer.copy_app(p)
+
+            self.assertEqual(helper.read_text(encoding="utf-8"), source.read_text(encoding="utf-8"))
+            self.assertTrue(os.access(helper, os.X_OK))
+
+    def test_copy_app_installs_claude_notify_helper_as_executable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "package"
+            target = root / "installed"
+            (project / "bridge").mkdir(parents=True)
+            (project / "bridge/__init__.py").write_text("", encoding="utf-8")
+            (project / "mac").mkdir()
+            source = project / "mac/M5ClaudeNotify.sh"
+            source.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+            (project / "config.example.json").write_text("{}\n", encoding="utf-8")
+            helper = target / "bin/M5ClaudeNotify"
+            p = {
+                "project": project,
+                "target": target,
+                "installed_app": target / "app",
+                "config": target / "config.json",
+                "claude_notify_helper": helper,
+            }
+
+            self.installer.copy_app(p)
+
+            self.assertEqual(helper.read_text(encoding="utf-8"), source.read_text(encoding="utf-8"))
+            self.assertTrue(os.access(helper, os.X_OK))
+
+    def test_claude_completion_hook_preserves_peon_ping_stop_handler(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "package"
+            target = root / "installed"
+            settings = root / ".claude/settings.json"
+            settings.parent.mkdir(parents=True)
+            peon = "/Users/example/.claude/hooks/peon-ping/peon.sh"
+            settings.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "Stop": [
+                                {
+                                    "matcher": "",
+                                    "hooks": [
+                                        {"type": "command", "command": peon, "timeout": 10}
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project / "bridge").mkdir(parents=True)
+            (project / "bridge/__init__.py").write_text("", encoding="utf-8")
+            (project / "config.example.json").write_text("{}\n", encoding="utf-8")
+            helper = target / "bin/M5ClaudeNotify"
+            p = {
+                "project": project,
+                "target": target,
+                "installed_app": target / "app",
+                "config": target / "config.json",
+                "claude_settings": settings,
+                "claude_notify_helper": helper,
+            }
+
+            self.installer.install_claude_completion_hook(p)
+            self.installer.install_claude_completion_hook(p)
+
+            installed = json.loads(settings.read_text(encoding="utf-8"))
+            handlers = [
+                handler
+                for group in installed["hooks"]["Stop"]
+                for handler in group["hooks"]
+            ]
+            self.assertEqual(sum(handler["command"] == peon for handler in handlers), 1)
+            self.assertEqual(sum(handler["command"] == str(helper) for handler in handlers), 1)
 
     def test_audio_helper_builds_from_tracked_source(self):
         with tempfile.TemporaryDirectory() as temporary:

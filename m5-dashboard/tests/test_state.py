@@ -26,6 +26,25 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(snapshot["claude"]["lifetime_tokens"], 456)
         self.assertIn("codex", snapshot)
 
+    def test_authenticated_completion_is_visible_before_monitor_poll(self):
+        state = DashboardState("Air")
+        state.set_codex(
+            {
+                "connected": True,
+                "results": [{"id": "old", "title": "Old", "completed_at": 100}],
+            }
+        )
+        accepted = state.add_completion(
+            "codex", {"id": "turn-2", "title": "Codex", "completed_at": 200}
+        )
+
+        snapshot = state.snapshot()
+        self.assertEqual(accepted["id"], "turn-2")
+        self.assertEqual(snapshot["codex"]["results"][0]["id"], "turn-2")
+        self.assertEqual(snapshot["codex"]["results"][1]["id"], "old")
+        with self.assertRaises(ValueError):
+            state.add_completion("codex", {"id": "", "completed_at": 0})
+
     def test_dashboard_snapshots_ai_hotspot_and_obsidian_independently(self):
         state = DashboardState("Air")
         hotspot = {"active": True, "alert": {"title": "GPT-6 正式发布"}}

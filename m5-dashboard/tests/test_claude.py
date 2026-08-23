@@ -1,10 +1,70 @@
 import unittest
+import json
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
 
-from bridge.claude_client import local_claude_state, normalize_claude_stats
+from bridge.claude_client import (
+    ClaudeMonitor,
+    hook_completion_results,
+    local_claude_state,
+    normalize_claude_stats,
+)
+from bridge.claude_hook import notify_bridge
 
 
 class ClaudeUsageTests(unittest.TestCase):
+    def test_completion_wake_interrupts_poll_delay(self):
+        monitor = ClaudeMonitor({}, lambda _: None)
+        self.assertEqual(monitor.wake(), {"provider": "claude", "woken": True})
+        self.assertTrue(monitor._wake_event.is_set())
+        monitor._wait(10)
+        self.assertFalse(monitor._wake_event.is_set())
+
+    def test_hook_notifies_authenticated_local_bridge(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "config.json"
+            config.write_text(
+                json.dumps({"server": {"api_token": "secret", "port": 9998}}),
+                encoding="utf-8",
+            )
+            response = mock.MagicMock()
+            response.__enter__.return_value.status = 200
+            with mock.patch.dict(os.environ, {"M5_DASH_CONFIG": str(config)}), mock.patch(
+                "bridge.claude_hook.urllib.request.urlopen", return_value=response
+            ) as request:
+                self.assertTrue(
+                    notify_bridge({"id": "stop-1", "title": "Claude", "completed_at": 123})
+                )
+            sent = request.call_args.args[0]
+            self.assertEqual(sent.full_url, "http://127.0.0.1:9998/api/internal/completion/claude")
+            self.assertEqual(sent.get_header("X-dashboard-token"), "secret")
+            self.assertEqual(
+                json.loads(sent.data),
+                {"id": "stop-1", "title": "Claude", "completed_at": 123},
+            )
+
+    def test_completion_results_require_stop_hook_receipt(self):
+        now = datetime(2026, 8, 24, 12, tzinfo=timezone.utc).astimezone()
+        sessions = {
+            "session-done-12345678": {
+                "completed_at": int(now.timestamp()),
+                "completion_id": "session-done:1",
+            }
+        }
+        transcript_candidates = [
+            {"id": "12345678", "title": "真实完成的 Claude 任务", "completed_at": 1}
+        ]
+
+        visible = hook_completion_results(sessions, transcript_candidates, True, now=now)
+        hidden = hook_completion_results(sessions, transcript_candidates, False, now=now)
+
+        self.assertEqual(visible[0]["title"], "真实完成的 Claude 任务")
+        self.assertEqual(visible[0]["completed_at"], int(now.timestamp()))
+        self.assertEqual(hidden[0]["title"], "Claude 1")
+
     def test_local_only_state_is_online_without_remote_usage(self):
         result = local_claude_state(123)
         self.assertTrue(result["connected"])

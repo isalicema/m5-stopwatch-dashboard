@@ -127,6 +127,28 @@ python3 scripts/install.py --launch-agent
 python3 scripts/install.py --all
 ```
 
+Codex 的完成动画只应绑定产品级 `notify` 发出的 `agent-turn-complete`，不再把 session JSONL
+中的 `task_complete` 当作完成信号；因此普通 tool use 不会误播动画。安装器会把接收器安装为：
+
+```text
+~/Library/Application Support/M5Dashboard/bin/M5CodexNotify
+```
+
+如果 `~/.codex/config.toml` 已经通过包装脚本串联 peon-ping 等完成音效，不要覆盖原有
+`notify`；只需在同一个包装脚本中，把收到的原始 JSON payload 原样再传给上面的接收器。
+这样音效和手表动画共享 Codex 自己的同一次 `turn-ended` 回调，同时任一辅助程序失败都不应
+阻断 Codex。未配置产品级 `notify` 时，旧式 Hooks 仍可提供活动状态，但不会猜测完成动画。
+
+Claude 完成动画采用同一原则：`--hooks` 会在现有 Claude Code `Stop` Hook 旁追加
+`M5ClaudeNotify`，不会替换 peon-ping。对话 JSONL 仍负责活动与可选标题显示，但其中的
+`end_turn` 不再直接触发动画；只有 Claude Code 真正发出 `Stop` 时才会出现完成反馈。
+只补装这一个锚点时可运行 `python3 scripts/install.py --claude-hook`。
+
+完成 Hook 会先通过带 Dashboard Token 的本机 HTTP 接口原子合并一条无正文凭据，再向已认证
+的手表发送不含 Token、标题或对话的 UDP 状态变化信标；USB 在线时还会直接推送一次新快照。
+手表收到信标后只额外拉取一次正常鉴权状态，信标丢失则由原有 2 秒轮询兜底。因此动画无需
+依靠 AI 活跃期间的高频轮询，长期运行 Codex/Claude 也不会持续增加手表通信耗电。
+
 StopWatch 插着 USB 时不会长期占用系统默认输入。只有从第 5 页开始 Typeless 听写时，
 Bridge 才会记住当前麦克风并临时切换到 `M5 StopWatch Mic`（兼容早期名称
 `TinyUSB UAC1`）；手表结束听写或启动失败后会恢复原输入设备。通过键盘或其他方式启动
