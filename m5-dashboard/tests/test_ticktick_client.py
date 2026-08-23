@@ -47,8 +47,12 @@ class TickTickMonitorTests(unittest.TestCase):
         self.assertEqual(
             self.monitor._request.call_args_list,
             [
-                mock.call("/focus/click", {}),
-                mock.call("/pomo/start", {"duration_seconds": 1500}),
+                mock.call("/focus/click", {}, self.monitor.action_timeout),
+                mock.call(
+                    "/pomo/start",
+                    {"duration_seconds": 1500},
+                    self.monitor.action_timeout,
+                ),
             ],
         )
 
@@ -63,8 +67,15 @@ class TickTickMonitorTests(unittest.TestCase):
         self.monitor.perform("stopwatch-click")
         self.assertEqual(
             self.monitor._request.call_args_list,
-            [mock.call("/pomo/pause", {}), mock.call("/focus/click", {})],
+            [
+                mock.call("/pomo/pause", {}, self.monitor.action_timeout),
+                mock.call("/focus/click", {}, self.monitor.action_timeout),
+            ],
         )
+
+    def test_ui_actions_get_a_longer_timeout_than_state_reads(self):
+        self.assertEqual(self.monitor.timeout, 2)
+        self.assertEqual(self.monitor.action_timeout, 12)
 
 
 class DailyFocusLedgerTests(unittest.TestCase):

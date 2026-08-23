@@ -27,10 +27,14 @@ class QuotaRingTests(unittest.TestCase):
 
     def test_clock_uses_a_distinct_mint_identity_instead_of_ticktick_coral(self):
         clock = function_source(self.source, "void drawClockPage(")
+        battery = function_source(self.source, "void drawBatteryStatusAt(")
         self.assertIn("const uint16_t mint = rgb(24, 229, 161);", clock)
         self.assertIn("drawEditorialBackdrop(mint);", clock)
         self.assertIn("drawBatteryStatusAt(mint, ink, 326, 76, false);", clock)
         self.assertIn("deviceCharging && useChargingAccent", self.source)
+        self.assertIn("int fillWidth = deviceCharging", battery)
+        self.assertIn("? (iconWidth - 4)", battery)
+        self.assertEqual(battery.count("canvas.fillTriangle("), 2)
         self.assertIn("canvas.fillCircle(236, 303, 7, mint);", clock)
         self.assertNotIn("const uint16_t coral = rgb(255, 59, 48);", clock)
 
@@ -199,6 +203,19 @@ class QuotaRingTests(unittest.TestCase):
         self.assertIn('"stopwatch-end"', touch)
         self.assertIn('"countdown-end"', touch)
         self.assertIn("performTickTickAction(action)", touch)
+
+    def test_focus_actions_update_the_visible_timer_before_bridge_confirmation(self):
+        optimistic = function_source(self.source, "void applyOptimisticTickTickAction(")
+        self.assertIn("ticktick.stopwatchElapsed = currentStopwatchElapsed();", optimistic)
+        self.assertIn('ticktick.stopwatchState = "paused";', optimistic)
+        self.assertIn('ticktick.stopwatchState = "running";', optimistic)
+        self.assertIn("ticktick.countdownRemaining = currentCountdownRemaining();", optimistic)
+
+        action = function_source(self.source, "void performTickTickAction(")
+        self.assertLess(
+            action.index("applyOptimisticTickTickAction(action);"),
+            action.index("sendUsbDashboardAction(action);"),
+        )
 
 
 if __name__ == "__main__":

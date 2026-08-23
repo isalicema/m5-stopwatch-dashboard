@@ -144,6 +144,10 @@ class TickTickMonitor(threading.Thread):
         self.base_url = str(config.get("base_url") or "http://127.0.0.1:8787").rstrip("/")
         self.token = str(config.get("token") or "")
         self.timeout = max(0.2, min(5.0, float(config.get("timeout_seconds", 2))))
+        self.action_timeout = max(
+            self.timeout,
+            min(30.0, float(config.get("action_timeout_seconds", 12))),
+        )
         self.refresh_seconds = max(0.25, float(config.get("refresh_seconds", 1)))
         self.duration_seconds = max(60, int(config.get("duration_seconds") or 1500))
         self._daily_focus = DailyFocusLedger(str(config.get("daily_state_path") or ""))
@@ -168,13 +172,20 @@ class TickTickMonitor(threading.Thread):
             "error": error,
         }
 
-    def _request(self, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _request(
+        self,
+        path: str,
+        payload: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["X-Focus-Token"] = self.token
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(self.base_url + path, data=data, headers=headers)
-        with self._opener.open(request, timeout=self.timeout) as response:
+        with self._opener.open(
+            request, timeout=self.timeout if timeout is None else timeout
+        ) as response:
             value = json.load(response)
         if not isinstance(value, dict) or value.get("ok") is not True:
             raise ValueError("TickTick bridge returned an unhealthy response")
@@ -217,24 +228,24 @@ class TickTickMonitor(threading.Thread):
 
         if action == "stopwatch-click":
             if stopwatch_state in ("idle", "done", "paused") and countdown_state == "running":
-                self._request("/pomo/pause", {})
-            self._request("/focus/click", {})
+                self._request("/pomo/pause", {}, self.action_timeout)
+            self._request("/focus/click", {}, self.action_timeout)
         elif action == "stopwatch-end":
-            self._request("/focus/double-click", {})
+            self._request("/focus/double-click", {}, self.action_timeout)
         elif action == "countdown-click":
             if countdown_state == "running":
                 path, payload = "/pomo/pause", {}
             elif countdown_state == "paused":
                 if stopwatch_state == "running":
-                    self._request("/focus/click", {})
+                    self._request("/focus/click", {}, self.action_timeout)
                 path, payload = "/pomo/resume", {}
             else:
                 if stopwatch_state == "running":
-                    self._request("/focus/click", {})
+                    self._request("/focus/click", {}, self.action_timeout)
                 path, payload = "/pomo/start", {"duration_seconds": self.duration_seconds}
-            self._request(path, payload)
+            self._request(path, payload, self.action_timeout)
         else:
-            self._request("/pomo/end", {})
+            self._request("/pomo/end", {}, self.action_timeout)
         return self.refresh()
 
     def stop(self) -> None:

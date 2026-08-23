@@ -795,10 +795,9 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
 - Alice 发现首页天气显示“暂不可用”。Bridge 状态确认原配置仍是朋友底座遗留的苏州坐标，
   且本次 Open-Meteo 首次请求碰到瞬时 HTTP 503；旧监控会在首次失败后等待完整一小时，放大
   了短暂故障。天气监控现改为失败后默认 60 秒重试；已有成功天气时继续展示最后有效值，
-  只在后台保留错误。153 项 Python 测试通过并已部署 Bridge。Alice 指定改为北京朝阳区，
-  本机私人配置已原子更新为行政区中心 `39.9204498, 116.4369109`、时区
-  `Asia/Shanghai`，不再继承朋友城市；Bridge 重启后的实测状态为可用、北京朝阳、23.5°C、
-  多云、错误为空，并已重新通过 USB 同步。该项无需固件更新。
+  只在后台保留错误。153 项 Python 测试通过并已部署 Bridge。Alice 指定改为自己的常用城市，
+  本机私人配置已原子更新为对应行政区中心和 `Asia/Shanghai` 时区，不再继承朋友城市；Bridge
+  重启后的实测天气状态可用、错误为空，并已重新通过 USB 同步。该项无需固件更新。
 - Alice 重新确定电源键契约：短按熄屏/唤醒，双击进入程序选择器，未接 USB 时长按关机；
   接 USB 的约 2 秒长按继续保留原厂 Download Mode，避免失去首次烧录和救援入口。软件状态机
   使用 500 ms 双击窗口，单击在窗口结束后才结算，长按会取消待结算单击，因此不会先熄屏再
@@ -938,7 +937,7 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
   在线时 `MAC MIC / READY` 使用 Mac 默认麦克风，并可从表盘完成 Typeless 启停。
 - Alice 完成家庭 Wi-Fi 配置后，`MAC MIC` 已能远程启动 Typeless，但真机出现“Mac 已开始听写、
   表盘却显示 `ERROR`”、胶囊中文变竖框、无可感震动。Bridge 日志确认来自
-  `192.168.31.59` 的发现与鉴权均成功，且 `Typeless start shortcut sent (system mic)` 已执行；
+  局域网地址的发现与鉴权均成功，且 `Typeless start shortcut sent (system mic)` 已执行；
   根因是固件 HTTP 客户端只等 3 秒，短于 Bridge 的 5 秒助手超时加 1 秒冷启动就绪窗，造成
   成功后的假失败。修复将 Typeless 专用等待窗延至 8 秒，其他动作仍维持 3 秒；同时给原生
   18 px Noto Bold 子集补齐 `使写手按次表试` 七字，旧 217 个字形保持不重绘，并将 Mac 模式
@@ -955,7 +954,7 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
   `9cf6e746d161fa008869d93a701f039b24d793a310ed9832396129e12f0e0cf1`。Alice 连接 USB 后，固件
   已写入应用分区 `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS；设备恢复
   为 `/dev/cu.usbmodemM5DASHMIC31`，Bridge `/healthz` 返回 `{"ok":true}`，日志确认 USB
-  重新鉴权且 Wi-Fi 端 `192.168.31.59` 恢复主动发现。等待 Alice 真机复验 `MAC MIC` 启停、
+  重新鉴权且 Wi-Fi 端恢复主动发现。等待 Alice 真机复验 `MAC MIC` 启停、
   胶囊完整字形、三种触感，以及 Obsidian“打开文档”的命中率与震动反馈。
 - Alice 的真机录像确认 Codex/Claude 完成动画收尾存在两处刷新竞态：450 px 动画画布与
   466 px 物理外框分别读取 `millis()`，在跨过动画结束边界时会让外框提前恢复浅色并露出
@@ -1120,6 +1119,37 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
   `7d97273a5a425a5bd4a9199f76b587d1e405ac5b1b6bf7915096eea34ecf1d5a`。Bridge 日志确认
   manifest、完整交付、软件重启及 USB 重新鉴权。连接页秒数可在本版直接真机复测；本轮 OTA
   页面仍由旧固件绘制，外框修复需下一次 OTA 才能完成真机验证。
+- 充电观察暴露出两个叠加问题：M5PM1 的 `CHG_EN` 会在复位、下载模式或关机后自动清零，而
+  Dashboard 过去没有在启动时重新打开它；旧闪电又只是电量比例填充区域中的 1 px 镂空线，
+  低电量时即使 `CHG_STAT` 有效也可能完全不可见。现在 `M5.begin()` 后显式执行
+  `M5.Power.setBatteryCharge(true)`，USB 数据与充电保持并行；真实充电态使用完整深色电池体
+  和两枚实心三角组成的加粗闪电，仍以硬件 `CHG_STAT` 为准，不把“插线”伪装成“充电中”。
+  196 项 Python、独立 C++ 状态机、差异检查及完整 UAC 构建通过；冻结并 OTA 安装的镜像为
+  5,100,112 bytes、SHA-256
+  `0abfb7ab4a0f307aef33e55375b9a0fe0da1762bd831c71c253495b6886bc42f`。Bridge 日志确认
+  manifest、完整固件交付、软件重启和 USB 重新鉴权；Alice 真机确认充电闪电出现，本项 PASS。
+  本次 OTA 页面由上一版 `7d972...` 绘制，Alice 同时确认顶部与右侧不再露出首页强调色，完整
+  物理外框为黑色，OTA 外框修复也正式 PASS。
+- TickTick 正计时暴露出跨两层的确认延迟：Focus Bridge 在启动命令执行前就建立本地起点，
+  恢复时又在 UI 命令确认前结束暂停区间，会把几秒命令耗时永久算入专注；手表等待 USB / HTTP
+  回执时仍沿用旧 `running` 状态，也会在按下暂停后继续走。Focus Bridge 现改为命令完成后建立
+  启动基线，并把整个恢复确认窗口保留在暂停区间；LaunchAgent 已重启且 `/health` 返回正常。
+  固件新增本地乐观状态：暂停与结束立即冻结、继续立即续走，权威回执随后仍会校准或回滚。
+  真实 USB 日志进一步证明旧 Dashboard Bridge 把耗时超过 2 秒的成功 UI 动作误报为
+  `action failed ... timed out`；状态查询现继续使用 2 秒超时，TickTick 动作独立使用 12 秒确认
+  窗口。Focus Bridge 7 项与 Dashboard 198 项 Python、独立 C++ 状态机、两仓差异检查和完整
+  UAC 构建通过。5,100,496-byte 镜像、SHA-256
+  `3f200d7f0b00884624a1b6536273d73b926fe15717812ee4f3dd2a409f317bf6` 已经 OTA 完整交付；Bridge
+  收到软件重启、USB 重新鉴权和 Wi-Fi discovery，活动 manifest 已归档。安装链路 PASS；Alice
+  连续真机验证暂停、继续与结束，确认手表会先即时响应，再以 TickTick 权威回执追秒校准，且
+  最终保存时长不再累计命令延迟，本项 PASS。
+- 面向公开发布补做了两仓依赖与敏感信息审计：当前跟踪文件及 Git 历史未发现真实 API Key、
+  GitHub Token、私钥、Wi-Fi 密码、Dashboard Token、真实 `config.json` 或预编译固件；
+  `api-usage-board` 公开仓库中的 `.env.example` 仅含明确占位符。公开 README 现将 Multi AI
+  Usage Monitor 与 TickTick Focus Bridge 标记为按功能选装并链接到各自 GitHub；同时把天气
+  描述改为可配置的“本地天气”，移除台账中的具体家庭局域网地址。Multi AI Usage Monitor
+  缺席时 Dashboard 可继续运行：Codex 保留本机活动、官方额度与今日用量，Claude 保留本机
+  活动；首页跨 Provider 总量和 Claude Token/额度增强字段明确降级，不再暗示它是固件硬依赖。
 
 ## 2026-08-23：今日收束
 
@@ -1138,18 +1168,18 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
   SHA-256 和 ESP 镜像后写入未运行的另一 OTA 分区，新系统完成启动才确认有效。USB 继续负责
   首次安装与救援，救援仅重置 `otadata` 并写 `ota_0`，不擦除 NVS。真实 OTA 已完成
   `ota_0 -> ota_1`，Alice 已确认 `VERIFY` 和 `COMPLETE/RESTART` 各一次轻振，中间传输安静。
-- **当前实机版本**：最新已安装镜像为 5,099,632 bytes，SHA-256
-  `7d97273a5a425a5bd4a9199f76b587d1e405ac5b1b6bf7915096eea34ecf1d5a`。195 项 Python、独立
+- **当前实机版本**：最新已安装镜像为 5,100,496 bytes，SHA-256
+  `3f200d7f0b00884624a1b6536273d73b926fe15717812ee4f3dd2a409f317bf6`。198 项 Python、独立
   C++ 状态机、`git diff --check` 与完整 UAC 构建通过；Bridge 已完整交付镜像、收到软件重启并
-  重新鉴权。连接页读秒修复可直接复测；OTA 外框修复必须在下一次 OTA 时由本版固件绘制页面，
-  因而仍属待实机验证。
+  重新鉴权。Alice 已确认 OTA 页面完整覆盖物理外框、无首页强调色泄漏，并确认插线后的充电
+  闪电出现；两项均为真机 PASS。连接页读秒修复仍可在下次从程序选择器进入时直接复测。
 - **续航观察**：已开始 Wi-Fi、无 USB 的自然使用校准；当前首组观察为起始 99%，18:59 显示
   92%。这只是曲线起点，尚不足以推导总续航或判定电量映射精度。
 
 ## 下一阶段
 
-1. 用下一次正常 OTA 目视验证深色更新页完整覆盖 466 px 物理外框，并复测程序选择器进入
-   Dashboard 时连接页不再残留首页读秒。
+1. 复测程序选择器进入 Dashboard 时连接页不再残留首页读秒；OTA 深色更新页完整覆盖
+   466 px 物理外框已经真机 PASS。
 2. 补做损坏镜像不切换、启动失败回滚和 USB 救援演练；USB 始终保留为最终救援通道。
 3. 继续记录 Wi-Fi、无 USB 的时间与电量，形成完整放电曲线后再校准百分比映射和续航策略。
 4. 分别注入 `scream/alert/inbox` 测试事件，验证声音、震动、自动切页、台账与不误叫。

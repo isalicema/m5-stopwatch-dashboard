@@ -16,8 +16,10 @@
 ## 数据路径
 
 StopWatch 默认通过物理 USB CDC 访问本机 Dashboard 桥接，也可选择带 Token 的局域网
-HTTP。Dashboard
-再复用已经由 Stick S3 项目验证过的 TickTick 专注服务，以及本机 Multi AI Usage Monitor：
+HTTP。Dashboard 再复用已经由
+[M5StickS3 TickTick Focus Bridge](https://github.com/isalicema/m5stick-ticktick-focus)
+验证过的专注服务，以及可选的
+[Multi AI Usage Monitor](https://github.com/isalicema/api-usage-board)：
 
 ```text
 StopWatch A/B 按键
@@ -34,8 +36,9 @@ api-usage-board (:8177)
 
 ## 1. 准备 TickTick 专注服务
 
-本项目默认连接 `http://127.0.0.1:8787`，复用同一工作区中的
-`m5stick-ticktick-focus/mac-bridge/focus_bridge.py`。该服务提供：
+本项目默认连接 `http://127.0.0.1:8787`，复用
+[m5stick-ticktick-focus](https://github.com/isalicema/m5stick-ticktick-focus) 中的
+`mac-bridge/focus_bridge.py`。该服务提供：
 
 - `GET /focus/state`、`POST /focus/click`、`POST /focus/double-click`
 - `GET /pomo/state`、`POST /pomo/start|pause|resume|end`
@@ -61,7 +64,9 @@ python3 scripts/check.py --token 'YOUR_DASHBOARD_TOKEN'
 看到 `TickTick: connected=True` 说明专注服务已经接通。离线时先确认 8787 服务正在运行，
 再检查 `ticktick.base_url` 和 `ticktick.token`。
 
-AI 用量默认读取 `http://127.0.0.1:8177/api/token-series?days=380&metric=total`：最后一天值用于
+AI 用量是**可选增强项**。安装并运行
+[Multi AI Usage Monitor](https://github.com/isalicema/api-usage-board) 后，Dashboard 默认读取
+`http://127.0.0.1:8177/api/token-series?days=380&metric=total`：最后一天值用于
 首屏今日总量，各渠道的窗口总和可作为本地日志可回溯累计量；当前 Multi AI Usage Monitor
 最多扫描约 95 天本地 Claude 日志，因此 Claude 的“累计”是可回溯累计，不冒充账号创建
 以来的绝对终身总量。
@@ -72,6 +77,12 @@ AI 用量默认读取 `http://127.0.0.1:8177/api/token-series?days=380&metric=to
 数据冒充完整总量；Grok 当天有数据时因其日志是近似口径，数值前显示 `~`。
 当前跨 Provider 没有共同 request id；若同一次请求同时被客户端本地日志和 OpenRouter
 analytics 记录，需要在 `api-usage-board` 侧排除重复渠道，手表端不会猜测去重。
+
+没有安装 Usage Monitor 时，Dashboard 仍能启动：Codex 从本机 App Server、Hooks 与 session
+日志读取活动、官方额度和本机今日用量；Claude Code 仍从 `~/.claude/projects` 显示活动任务。
+缺失的是首页跨 Provider 总量、Claude Token/额度增强数据，以及 Kimi Code、DeepSeek、
+OpenRouter、Grok 的汇总。首屏会显示 `AI--`，不会把局部数据冒充完整总量。若不需要这些
+增强项，可在本机 `config.json` 中设置 `ai_usage.enabled: false`，避免无意义的连接重试。
 
 TickTick Focus Bridge 只提供当前正计时和倒计时状态，没有今日汇总字段。Dashboard Bridge
 因此按两个计时器的进度增量维护按日台账，并持久化到 `ticktick.daily_state_path`；首页显示
@@ -218,8 +229,9 @@ USB 会话中拔线会主动结束当前听写；M5 麦克风只在这段会话�
 
 - 第 1 页：时钟总览。时分右侧以原生抗锯齿 Noto Bold 32 px 数字和下划线显示跳动秒数，
   并靠近 `HH:MM` 组成一个整体；每秒只刷新秒数小区域，分钟变化时才完整重绘，避免整页闪动。
-  薄荷绿强调底上的电池始终使用高对比深色，USB 充电状态只显示闪电切口，不会变成与底色
-  混在一起的绿色。紧凑状态条显示 TickTick 当前专注进度
+  应用每次启动都会重新启用 M5PM1 充电器，USB 数据与充电可同时工作；薄荷绿强调底上的电池
+  始终使用高对比深色，实际充电时显示完整深色电池与加粗闪电切口，不会变成与底色混在一起
+  的绿色。紧凑状态条显示 TickTick 当前专注进度
   与当天全部 Coding AI 的 Token 总处理量，例如 `专25m · AI 5.03亿`；Codex/Claude 额度分别
   留在第 3、4 页。
 - 第 2 页：TickTick 双计时卡片。左侧 A 为正计时，右侧 B 为 25 分钟倒计时。

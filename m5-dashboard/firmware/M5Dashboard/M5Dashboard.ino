@@ -1276,15 +1276,25 @@ void drawBatteryStatusAt(uint16_t background, uint16_t normalColor,
   canvas.drawRoundRect(iconX, iconY, iconWidth, iconHeight, 3, color);
   canvas.fillRoundRect(iconX + iconWidth, iconY + 4, 3, 6, 1, color);
   if (deviceBatteryLevel >= 0) {
-    int fillWidth = (iconWidth - 4) * deviceBatteryLevel / 100;
+    // While charging, use the percent text for the exact level and reserve the
+    // full battery body as a stable high-contrast field for the lightning
+    // cutout. A level-proportional fill can be too short to reach the bolt.
+    int fillWidth = deviceCharging
+                        ? (iconWidth - 4)
+                        : (iconWidth - 4) * deviceBatteryLevel / 100;
     if (fillWidth > 0) {
       canvas.fillRoundRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4, 2, color);
     }
   }
   if (deviceCharging) {
-    canvas.drawLine(iconX + 14, iconY + 2, iconX + 10, iconY + 7, background);
-    canvas.drawLine(iconX + 10, iconY + 7, iconX + 15, iconY + 7, background);
-    canvas.drawLine(iconX + 15, iconY + 7, iconX + 11, iconY + 12, background);
+    // Two filled wedges form a bold lightning cutout that remains visible on
+    // the 466 px AMOLED instead of collapsing to a one-pixel zig-zag.
+    canvas.fillTriangle(iconX + 14, iconY + 1,
+                        iconX + 8, iconY + 7,
+                        iconX + 14, iconY + 7, background);
+    canvas.fillTriangle(iconX + 11, iconY + 6,
+                        iconX + 17, iconY + 6,
+                        iconX + 11, iconY + 12, background);
   }
 
   canvas.setTextDatum(middle_left);
@@ -4681,11 +4691,62 @@ bool sendHttpTickTickAction(const String &action) {
   return sendHttpDashboardAction("/api/ticktick/" + action);
 }
 
+void applyOptimisticTickTickAction(const String &action) {
+  uint32_t now = millis();
+  if (action == "stopwatch-click") {
+    if (timerRunning(ticktick.stopwatchState)) {
+      ticktick.stopwatchElapsed = currentStopwatchElapsed();
+      ticktick.stopwatchState = "paused";
+    } else if (timerPaused(ticktick.stopwatchState)) {
+      ticktick.stopwatchState = "running";
+    } else {
+      if (timerRunning(ticktick.countdownState)) {
+        ticktick.countdownRemaining = currentCountdownRemaining();
+        ticktick.countdownState = "paused";
+      }
+      ticktick.stopwatchElapsed = 0;
+      ticktick.stopwatchState = "running";
+    }
+    ticktick.syncedAt = now;
+    return;
+  }
+  if (action == "countdown-click") {
+    if (timerRunning(ticktick.countdownState)) {
+      ticktick.countdownRemaining = currentCountdownRemaining();
+      ticktick.countdownState = "paused";
+    } else if (timerPaused(ticktick.countdownState)) {
+      ticktick.countdownState = "running";
+    } else {
+      if (timerRunning(ticktick.stopwatchState)) {
+        ticktick.stopwatchElapsed = currentStopwatchElapsed();
+        ticktick.stopwatchState = "paused";
+      }
+      ticktick.countdownRemaining = max(1, ticktick.countdownDuration);
+      ticktick.countdownState = "running";
+    }
+    ticktick.syncedAt = now;
+    return;
+  }
+  if (action == "stopwatch-end" && timerRunning(ticktick.stopwatchState)) {
+    ticktick.stopwatchElapsed = currentStopwatchElapsed();
+    ticktick.stopwatchState = "paused";
+    ticktick.syncedAt = now;
+  } else if (action == "countdown-end" && timerRunning(ticktick.countdownState)) {
+    ticktick.countdownRemaining = currentCountdownRemaining();
+    ticktick.countdownState = "paused";
+    ticktick.syncedAt = now;
+  }
+}
+
 void performTickTickAction(const String &action) {
   requireHighPerformance();
   currentPage = 1;
   overlayMode = OverlayMode::none;
   startVibration(action.endsWith("end") ? 90 : 55, action.endsWith("end") ? 55 : 28);
+  // Freeze/resume the visible timer at the button event. The USB/HTTP action
+  // can take several seconds while TickTick's UI command is confirmed; the
+  // following authoritative state response will still reconcile this preview.
+  applyOptimisticTickTickAction(action);
   if (usbBridgeOnline) {
     sendUsbDashboardAction(action);
   } else {
@@ -6141,6 +6202,10 @@ void setup() {
   auto config = M5.config();
   config.clear_display = true;
   M5.begin(config);
+  // M5PM1 clears CHG_EN after reset and Download Mode. Re-enable the physical
+  // charger on every application boot; USB data and battery charging are
+  // independent and are expected to operate at the same time.
+  M5.Power.setBatteryCharge(true);
   pinMode(kBButtonPin, INPUT_PULLUP);
   configurePowerButtonPolicy();
   disableBottomLed();

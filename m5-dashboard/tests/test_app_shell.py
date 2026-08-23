@@ -52,6 +52,15 @@ class AppShellTests(unittest.TestCase):
             normalized_logic,
         )
 
+    def test_boot_reenables_the_stopwatch_battery_charger(self):
+        setup = self.source.split("void setup()", 1)[1].split("void loop()", 1)[0]
+        self.assertIn("M5.begin(config);", setup)
+        self.assertIn("M5.Power.setBatteryCharge(true);", setup)
+        self.assertLess(
+            setup.index("M5.begin(config);"),
+            setup.index("M5.Power.setBatteryCharge(true);"),
+        )
+
     def test_screen_standby_keeps_bridge_and_arms_ai_hotspot_wake(self):
         lock_block = self.source.split("void setScreenLocked(bool locked)", 1)[1].split(
             "void updatePowerButton()", 1

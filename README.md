@@ -20,7 +20,7 @@
 
 | 屏幕 | 它在做什么 | 可以怎么用 |
 |---|---|---|
-| 1. 时钟总览 | 显示时间、跳秒、日期、北京朝阳天气、电量、TickTick 进度与当天全部 Coding AI Token | 轻触 `星盘` 看正在运行的任务，轻触 `成果` 回看今天完成的工作 |
+| 1. 时钟总览 | 显示时间、跳秒、日期、本地天气、电量、TickTick 进度与当天全部 Coding AI Token | 轻触 `星盘` 看正在运行的任务，轻触 `成果` 回看今天完成的工作 |
 | 2. TickTick 专注 | 把正计时和 25 分钟倒计时放在同一页 | A 控制正计时，B 控制倒计时；单击开始/暂停/继续，双击结束 |
 | 3. Codex | 显示当前状态、剩余额度、重置时间、今日与累计用量 | 有活动任务时轻触 Codex 图标查看详情；对话内容默认保持私密 |
 | 4. Claude Code | 显示 Claude Code 的活动、额度窗口与 Token 用量 | 有活动任务时轻触 Claude 图标查看详情；没有任务时保持安静 |
@@ -58,11 +58,29 @@
 - `m5-dashboard/`：M5 固件、通用 Mac 桥接、安装脚本和测试。
 - `m5-dashboard-home/`：只读取本机 Claude Code 日志的轻量伴随桥接。
 
+## 按需安装的伴随项目
+
+Dashboard 本体可以独立安装，但不同屏幕的数据来自不同的本机服务；不使用某项功能时，
+不必为了凑齐七屏而安装所有依赖。
+
+| 伴随项目 | 是否必装 | 提供什么 |
+|---|---|---|
+| [Multi AI Usage Monitor](https://github.com/isalicema/api-usage-board) | 推荐，但不是启动 Dashboard 的硬依赖 | 首页当天全部 Coding AI Token，Codex/Claude 的统一配额与重置窗口，Claude 今日及可回溯累计 Token；还可汇总 Kimi Code、DeepSeek、OpenRouter 与 Grok |
+| [M5StickS3 TickTick Focus Bridge](https://github.com/isalicema/m5stick-ticktick-focus) | 只在使用第 2 屏时需要 | TickTick 正计时、25 分钟倒计时及今日专注累计 |
+| Typeless for macOS | 只在使用第 5 屏时需要 | USB 手表麦克风或 Wi-Fi `MAC MIC` 听写 |
+
+没有安装 Multi AI Usage Monitor 时，Codex 仍可从本机 App Server、Hooks 与 session 日志显示
+活动任务、官方额度和本机今日用量；Claude Code 仍可显示本机活动任务。此时首页 AI 汇总显示
+`AI--`，Claude 的 Token/额度增强字段不可用。若不打算安装，可在本机 `config.json` 中将
+`ai_usage.enabled` 设为 `false`，不会影响时钟、专注、Typeless、热点或 Obsidian。
+
 ## 安全与隐私
 
 - 公开示例默认关闭任务标题和对话预览。
 - 真实的 `config.json`、TickTick/桥接令牌、`secrets.h`、任务日志、构建缓存
   和 `dist/` 均被 `.gitignore` 排除。
+- 天气地点、Obsidian 根目录与 Mac 名称都属于本机配置；公开示例不包含维护者的真实地址、
+  Wi-Fi 或局域网主机信息。
 - 局域网接口必须使用随机 Token，不能映射到公网。
 - 本地 Claude 模式只读取 `~/.claude/projects` 会话日志，不读取浏览器 Cookie、Keychain
   或官方账户接口。

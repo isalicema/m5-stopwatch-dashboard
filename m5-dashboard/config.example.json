@@ -17,9 +17,9 @@
   },
   "weather": {
     "enabled": true,
-    "city": "苏州",
-    "latitude": 31.2989,
-    "longitude": 120.5853,
+    "city": "北京",
+    "latitude": 39.9042,
+    "longitude": 116.4074,
     "timezone": "Asia/Shanghai",
     "refresh_seconds": 3600,
     "timeout_seconds": 8
@@ -103,6 +103,7 @@
     "base_url": "http://127.0.0.1:8787",
     "token": "",
     "timeout_seconds": 2,
+    "action_timeout_seconds": 12,
     "refresh_seconds": 1,
     "duration_seconds": 1500,
     "daily_state_path": "~/Library/Application Support/M5Dashboard/ticktick-daily-focus.json"
