@@ -89,6 +89,7 @@ class _TranscriptTracker:
             "title": "",
             "status": "unknown",
             "last_event": modified,
+            "completed_at": 0.0,
             "modified": modified,
             "messages": [],
             "message_indexes": {},
@@ -220,10 +221,7 @@ class _TranscriptTracker:
             self._advance(path)
         completed = []
         for index, state in enumerate(self._states.values(), 1):
-            stamp = max(
-                float(state.get("last_event") or 0),
-                float(state.get("modified") or 0),
-            )
+            stamp = float(state.get("completed_at") or 0)
             if state.get("status") != "idle" or stamp < day_start:
                 continue
             title = _clean_text(state.get("title")) or self._fallback_title(state, index)
@@ -252,19 +250,19 @@ class LocalCodexTranscripts(_TranscriptTracker):
             return
         kind = payload.get("type")
         if kind == "task_started":
-            state.update({"status": "working", "last_event": stamp})
+            state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
         elif kind == "task_complete":
-            state.update({"status": "idle", "last_event": stamp})
+            state.update({"status": "idle", "last_event": stamp, "completed_at": stamp})
         elif kind == "user_message":
-            state.update({"status": "working", "last_event": stamp})
+            state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
             key = str(payload.get("client_id") or "user-%d" % int(stamp * 1000))
             self._upsert_message(state, key, "user", str(payload.get("message") or ""), stamp)
         elif kind == "agent_message":
-            state.update({"status": "working", "last_event": stamp})
+            state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
             key = "agent-%d-%d" % (int(stamp * 1000), len(state["messages"]))
             self._upsert_message(state, key, "assistant", str(payload.get("message") or ""), stamp)
         elif kind == "agent_reasoning":
-            state.update({"status": "working", "last_event": stamp})
+            state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
 
     def _fallback_title(self, state: Dict[str, Any], index: int) -> str:
         return "Codex %d" % index
@@ -293,7 +291,7 @@ class LocalClaudeTranscripts(_TranscriptTracker):
             session_id = record.get("sessionId")
             if isinstance(session_id, str) and session_id:
                 state["session_id"] = session_id
-            state.update({"status": "working", "last_event": stamp})
+            state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
             key = str(record.get("uuid") or record.get("promptId") or "user-%d" % int(stamp * 1000))
             self._upsert_message(state, key, "user", text, stamp)
             return
@@ -304,10 +302,12 @@ class LocalClaudeTranscripts(_TranscriptTracker):
             self._upsert_message(state, key, "assistant", text, stamp)
             state["last_event"] = stamp
         stop_reason = message.get("stop_reason")
-        if stop_reason == "end_turn":
-            state.update({"status": "idle", "last_event": stamp})
+        if stop_reason == "end_turn" and text:
+            # Claude can emit a thinking-only end_turn before its visible final
+            # response. Only the visible response is a user-facing completion.
+            state.update({"status": "idle", "last_event": stamp, "completed_at": stamp})
         elif stop_reason in {"tool_use", "pause_turn", "max_tokens"}:
-            state.update({"status": "working", "last_event": stamp})
+            state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
 
     def _fallback_title(self, state: Dict[str, Any], index: int) -> str:
         return "Claude %d" % index

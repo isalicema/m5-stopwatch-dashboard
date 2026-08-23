@@ -155,6 +155,90 @@ class TranscriptTests(unittest.TestCase):
             self.assertEqual(result[0]["title"], "完成动态时钟")
             self.assertGreater(result[0]["completed_at"], 0)
 
+    def test_claude_thinking_end_turn_waits_for_visible_final_response(self):
+        now = datetime.now(timezone.utc)
+        thinking_stamp = now.isoformat()
+        final_stamp = now.replace(microsecond=0).isoformat()
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "project" / "session.jsonl"
+            rows = [
+                {
+                    "timestamp": thinking_stamp,
+                    "type": "user",
+                    "sessionId": "claude-87654321",
+                    "message": {"content": "检查动画触发"},
+                },
+                {
+                    "timestamp": thinking_stamp,
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "thinking", "thinking": "private"}],
+                        "stop_reason": "end_turn",
+                    },
+                },
+            ]
+            self._write(path, rows)
+            tracker = LocalClaudeTranscripts(root, stale_seconds=300)
+
+            self.assertEqual(len(tracker.snapshots(True)), 1)
+            self.assertEqual(tracker.completed_today(True), [])
+
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "timestamp": final_stamp,
+                            "type": "assistant",
+                            "message": {
+                                "id": "final-message",
+                                "content": [{"type": "text", "text": "动画检查完成。"}],
+                                "stop_reason": "end_turn",
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+
+            self.assertEqual(tracker.snapshots(True), [])
+            result = tracker.completed_today(True)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["completed_at"], int(now.timestamp()))
+
+    def test_codex_completion_timestamp_ignores_later_file_metadata(self):
+        completed = datetime.now(timezone.utc).replace(microsecond=0)
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "today" / "session.jsonl"
+            rows = [
+                {
+                    "timestamp": completed.isoformat(),
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "校验完成时间"},
+                },
+                {
+                    "timestamp": completed.isoformat(),
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete"},
+                },
+            ]
+            self._write(path, rows)
+            tracker = LocalCodexTranscripts(root, stale_seconds=300)
+            original = tracker.completed_today(True)[0]["completed_at"]
+
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "type": "turn_context",
+                            "payload": {"note": "non-lifecycle metadata"},
+                        }
+                    )
+                    + "\n"
+                )
+            os.utime(path, None)
+
+            self.assertEqual(tracker.completed_today(True)[0]["completed_at"], original)
+
 
 if __name__ == "__main__":
     unittest.main()

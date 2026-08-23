@@ -64,7 +64,29 @@ class LocalActivityTests(unittest.TestCase):
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(
                     json.dumps(
-                        {"timestamp": stamp(), "type": "assistant", "message": {"stop_reason": "end_turn"}}
+                        {
+                            "timestamp": stamp(),
+                            "type": "assistant",
+                            "message": {
+                                "content": [{"type": "thinking", "thinking": "private"}],
+                                "stop_reason": "end_turn",
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+            self.assertEqual(tracker.active_count(), 1)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "timestamp": stamp(),
+                            "type": "assistant",
+                            "message": {
+                                "content": [{"type": "text", "text": "已经修改完成。"}],
+                                "stop_reason": "end_turn",
+                            },
+                        }
                     )
                     + "\n"
                 )

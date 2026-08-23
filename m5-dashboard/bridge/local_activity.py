@@ -129,6 +129,20 @@ class LocalClaudeActivity(_JsonlActivityTracker):
             for item in content
         )
 
+    @staticmethod
+    def _has_visible_assistant_text(content: Any) -> bool:
+        if isinstance(content, str):
+            return bool(content.strip())
+        if not isinstance(content, list):
+            return False
+        return any(
+            isinstance(item, dict)
+            and item.get("type") in {"text", "output_text"}
+            and isinstance(item.get("text"), str)
+            and bool(item["text"].strip())
+            for item in content
+        )
+
     def _consume(self, state: Dict[str, Any], record: Dict[str, Any], stamp: float) -> None:
         message = record.get("message") if isinstance(record.get("message"), dict) else {}
         if record.get("type") == "user" and self._is_prompt(message.get("content")):
@@ -137,7 +151,9 @@ class LocalClaudeActivity(_JsonlActivityTracker):
         if record.get("type") != "assistant":
             return
         stop_reason = message.get("stop_reason")
-        if stop_reason == "end_turn":
+        if stop_reason == "end_turn" and self._has_visible_assistant_text(
+            message.get("content")
+        ):
             state.update({"state": "idle", "last_event": stamp})
         elif stop_reason in {"tool_use", "pause_turn", "max_tokens"}:
             state.update({"state": "working", "last_event": stamp})
