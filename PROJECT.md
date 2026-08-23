@@ -883,6 +883,136 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
   `101`、临时 M5 设备 ID `187`，两者不同，随后恢复返回 0。本轮无需重刷固件。Alice 随后
   完成端到端真机验收：系统麦克风日常录入正常，手表发起 Stopwatch + Typeless 时可顺利
   切到设备麦克风，结束后系统麦克风恢复正常；本项实机 PASS。
+- Alice 指出首页紧凑状态条的 `AI480M` 缺少分隔，Codex/Claude 页的 `今日用量 488M`、
+  `累计 12264M` 也不符合中文阅读习惯。首页和两张 Provider 页现统一规定：从 100M 起
+  换算为“亿”，最多保留两位小数并去除末尾零，例如分别显示 `AI 4.8亿`、`4.88亿`、
+  `122.64亿`；`AI` 与数字之间保留真实空格，数字与“亿”不留空格。为避免旧字体方块，
+  数字和前缀继续使用原编辑字体，仅“亿”混排为已验证的 16 px Noto 中文字形；Provider
+  样例宽度分别为 55 px 和 77 px，远小于 175 px 胶囊。163 项 Python 回归与 UAC 固件构建
+  通过；候选 `firmware.bin` 为 4,999,712 bytes，SHA-256
+  `be03da41b6529e5f807c8680adfacc5d1f1b4bdd8e33917c75fe1660777478d0`。Alice 授权更新后，
+  固件已写入原厂应用分区 `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS；
+  设备已恢复为 `/dev/cu.usbmodemM5DASHMIC31`，本机 `/healthz` 返回 `{"ok":true}`，USB Bridge
+  完成重新鉴权。首页、Codex 与 Claude 的中文单位显示仍待 Alice 实机目视确认。
+- 首轮中文单位实机目视发现，混排的 16 px Regular“亿”相对首页 14 px Medium 文案更大、
+  有锯齿且基线下沉；在 Codex/Claude 的 18 px Bold 数值中也显得偏细、偏低。修复没有继续
+  手调字符坐标，而是只给既有 `editorial_font_medium_14` 与 `editorial_font_bold_18`
+  抗锯齿子集各补入原生“亿”字形；其余 446 个既有字形保持原二进制不变。首页与 Provider
+  胶囊现在都将“数字 + 亿”作为同一字符串、使用同一字体和同一基线一次绘制。字库级放大
+  预览确认 `专0 · AI 5.03亿`、`4.96亿`、`122.64亿` 的字号、字重和基线一致；163 项 Python
+  回归、字体清单校验、差异检查与 UAC 构建全部通过。新候选 `firmware.bin` 为
+  5,000,080 bytes，SHA-256 `160dfec03c3cce3190e506000f5d805ee2ff8ee4f6347a78c814d3369e0532f7`；
+  Alice 授权更新后，固件已写入原厂应用分区 `0x20000`，esptool 回读确认
+  `Hash of data verified`，未擦除 NVS。设备已恢复为 `/dev/cu.usbmodemM5DASHMIC31`，本机
+  `/healthz` 返回 `{"ok":true}`；Bridge 日志确认重新打开 USB 端口、读取复位诊断并完成
+  Dashboard 鉴权。软件、烧录、Flash 回读与传输链路验证完成，等待第二轮真机目视确认。
+- Alice 确认中文“亿”字的字号、字重与基线已经正常，随后指出首页 `专0` 长期不变、Claude
+  页“累计”长期为 0。根因分别是旧固件只在计时器运行时计算单次进度百分比，以及本机
+  Claude 直读模式没有历史累计字段。现将首页定义改为 TickTick 今日累计专注分钟：Bridge
+  按正计时与 25 分钟倒计时的可见进度增量维护按日持久台账，重启不清零、跨本地午夜归零，
+  首页以 `专25m` 形式显示。Claude 累计改从 Multi AI Usage Monitor 的 380 天序列中取得
+  本机日志可回溯总量，不冒充账号绝对终身用量；当前实时验收值为今日专注 1539 秒、Claude
+  今日 12,146,262 tokens、可回溯累计 4,225,754,221 tokens（42.26 亿）。本机 Bridge 已
+  更新并验证两项字段不再为 0，165 项 Python 回归、差异检查与 UAC 固件构建通过；候选
+  `firmware.bin` 为 5,000,000 bytes，SHA-256
+  `13b641bc7de5e327be9e10d0e031ffa4b1249d48f9621f65e0e4ef91e8e96738`。Alice 授权更新后，
+  固件已写入原厂应用分区 `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS；
+  设备已恢复为 `/dev/cu.usbmodemM5DASHMIC31`，本机 `/healthz` 返回 `{"ok":true}`。Bridge
+  日志确认重新打开 USB 端口、读取复位诊断并完成 Dashboard 鉴权；烧录后实时状态仍返回
+  `today_focus_seconds=1539`、`claude_lifetime_tokens=4225754221`，等待 Alice 实机目视确认。
+- Alice 决定让 Typeless 第 5 屏在脱离 USB 时降级为类似 Stick S3 的 Wi-Fi 快捷控制器，同时
+  要求新增 `USB MIC / READY` 与 `MAC MIC / READY` 后不能破坏现有排版。当前候选实现三态：
+  USB 音频与 USB Bridge 完整在线时使用手表 48 kHz UAC 麦克风并显示真实波形；USB 不可用
+  但已鉴权 Wi-Fi Bridge 在线时，仅远程启停 Typeless、保留 Mac 当前默认麦克风且不伪造
+  峰值；两条链路均不可用时才显示 `NO / BRIDGE`。视觉上模式名固定使用现有原生 24 px
+  Noto Bold 标题网格，中央状态继续使用原生 80 px `READY / LIVE / ERROR`；实测 `USB MIC`
+  宽 98 px、`MAC MIC` 宽 100 px，基线与字重一致，未增加字形或运行时缩放。Mac Bridge 已
+  部署并通过健康检查，新 `/api/typeless/start-mac` 路由只发送快捷键、不调用 M5 音频切换；
+  168 项 Python、独立 C++ 状态机、差异检查与 UAC 构建通过。候选 `firmware.bin` 为
+  5,000,720 bytes，SHA-256
+  `f3054453162610bd13ced650719e4953d3dc8844af8fb0b1a293e6584dfe6570`。Alice 授权“更新”后，
+  固件已写入应用分区 `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS；设备
+  从下载端口 `/dev/cu.usbmodem2101` 恢复为 `/dev/cu.usbmodemM5DASHMIC31`，Bridge
+  `/healthz` 返回 `{"ok":true}`，日志确认重新读取复位诊断并完成 Dashboard USB 鉴权。等待
+  Alice 实机验证两条路径：插线时 `USB MIC / READY` 使用手表麦克风；拔线且 Wi-Fi Bridge
+  在线时 `MAC MIC / READY` 使用 Mac 默认麦克风，并可从表盘完成 Typeless 启停。
+- Alice 完成家庭 Wi-Fi 配置后，`MAC MIC` 已能远程启动 Typeless，但真机出现“Mac 已开始听写、
+  表盘却显示 `ERROR`”、胶囊中文变竖框、无可感震动。Bridge 日志确认来自
+  `192.168.31.59` 的发现与鉴权均成功，且 `Typeless start shortcut sent (system mic)` 已执行；
+  根因是固件 HTTP 客户端只等 3 秒，短于 Bridge 的 5 秒助手超时加 1 秒冷启动就绪窗，造成
+  成功后的假失败。修复将 Typeless 专用等待窗延至 8 秒，其他动作仍维持 3 秒；同时给原生
+  18 px Noto Bold 子集补齐 `使写手按次表试` 七字，旧 217 个字形保持不重绘，并将 Mac 模式
+  成功、失败、结束触感分别加强为 `120/90 ms`、`185/160 ms`、`105/70 ms`。171 项 Python、
+  独立 C++ 状态机、差异检查和 UAC 构建均通过；候选 `firmware.bin` 为 5,003,216 bytes，
+  SHA-256 `ade5a0111385c469edf14c1284004330aff8c7ba4c7ad117c894fa4705d09efa`，等待插线烧录与真机复验。
+- Alice 同时确认 Obsidian“打开文档”需要点两三次且没有震动。视觉胶囊为 166 × 52 px，旧热区
+  已有 182 × 66 px，因此根因不是文字按钮本身过窄，而是全局手势锁在 18 px 就把轻微指腹漂移
+  标记成翻页、真正翻页却要 100 px，形成 18–99 px 的无动作区；未进入动作函数也就不会震动。
+  修复将 AI 热点/Obsidian 功能胶囊纵向热区从 `Y=338..404` 扩为圆屏安全范围内的
+  `Y=330..408`，并允许 32 px 内的短漂移继续结算为按钮点击，同时保持 100 px 翻页门槛；
+  “打开文档”触感由 `70/40 ms` 加强为 `130/90 ms`。与 Typeless 修复合并后，173 项 Python、
+  独立 C++ 状态机、差异检查和 UAC 构建通过；最终候选为 5,003,168 bytes，SHA-256
+  `9cf6e746d161fa008869d93a701f039b24d793a310ed9832396129e12f0e0cf1`。Alice 连接 USB 后，固件
+  已写入应用分区 `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS；设备恢复
+  为 `/dev/cu.usbmodemM5DASHMIC31`，Bridge `/healthz` 返回 `{"ok":true}`，日志确认 USB
+  重新鉴权且 Wi-Fi 端 `192.168.31.59` 恢复主动发现。等待 Alice 真机复验 `MAC MIC` 启停、
+  胶囊完整字形、三种触感，以及 Obsidian“打开文档”的命中率与震动反馈。
+- Alice 的真机录像确认 Codex/Claude 完成动画收尾存在两处刷新竞态：450 px 动画画布与
+  466 px 物理外框分别读取 `millis()`，在跨过动画结束边界时会让外框提前恢复浅色并露出
+  四个亮点；首页读秒也以动画时长瞬时过期为准，可能在状态机正式清场前把秒数局部贴到
+  旧动画上。修复后每个物理帧只采样一次动画时刻与背景，并由设计画布、物理外框和推屏
+  全程复用；秒数与两秒状态同步则等待 `completionAnimationRunning` 真正退出后恢复。新增
+  两项回归约束后，175 项 Python、独立 C++ 状态机、差异检查与 UAC 构建全部通过。最终
+  `firmware.bin` 为 5,003,200 bytes，SHA-256
+  `1be6b442c4b5a02168a449d17870477e29f3d878bba69767ce0b5bd2e8fb7a86`；已写入原厂应用分区
+  `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS。设备恢复为
+  `/dev/cu.usbmodemM5DASHMIC31`，Bridge 重新读取正常硬复位、完成 Dashboard USB 鉴权，
+  `/healthz` 返回 `{"ok":true}`。等待下一次真实完成事件目视确认四边不露底、读秒不抢帧。
+- Alice 放慢录像后修正完成动画诊断：问题不是中心图形本身，而是中心图形没有先退场，随后
+  展开的大对勾有一两帧从它上面长出，造成重叠。新版保留中心品牌层，并把 Codex 宠物换成
+  Codex 官方应用图标；Claude 同步使用官方应用图标。两家图标都使用预渲染抗锯齿的
+  `96 → 80 → 64 → 48 → 32 px` 五级缩小退场，850 ms 时完全消失，留出 150 ms 空场，
+  1000 ms 后大对勾才开始展开，因此两个阶段不再叠帧。图标帧已预先合成到各自深色动画
+  背景，避免真机实时缩放噪点。构建时另发现未跟踪的 Finder/编辑器编号备份
+  `M5Dashboard.ino 2.cpp`、`3.cpp`、`4.cpp` 会被 PlatformIO 当作正式源码；未删除这些文件，
+  只在构建配置中按编号备份通配规则排除，避免旧动画实现参与编译。176 项 Python、独立 C++
+  状态机、差异检查与 UAC 构建通过；候选 `firmware.bin` 为 5,087,376 bytes，SHA-256
+  `3f8aa4e371ef37c41ac7443c9991a8c8669f6a98ddf39e9e93e0d3a2657121c4`。已写入原厂应用分区并
+  通过 esptool 哈希校验；真机确认 Codex 图标正常退场、大对勾不叠帧、四边不露底且首页读秒
+  无残留。Obsidian / AI 胶囊热区与触摸振动也同时通过真机验收。
+- 无 USB、经 Wi-Fi Bridge 调用 Mac 麦克风时，真机出现“电脑已经开始听写，但约 6 秒后手表
+  显示 ERROR；ERROR 再点无法停止，迟到进入 LIVE 后才能结束，READY 也迟约 3 秒”的状态
+  错位。Bridge 日志确认实际 `Typeless start/stop shortcut sent (system mic)` 均成功；根因是
+  POST 动作成功后仍返回包含对话与热点内容的完整 Dashboard 快照，手表在大回执传输/解析完
+  之前超时，把成功误判为失败。修复后所有 POST 动作只返回紧凑确认包，完整状态仍由
+  `GET /api/state` 单独同步；Typeless 启停在 Bridge 内进入单线程顺序队列，HTTP 可立即确认，
+  即使快速开始再停止也会按序执行。手表端触摸后立即震动并先更新 LIVE / READY；若确认包
+  丢失，启动意图仍保留为 active，使 ERROR 再点执行“确保停止”而非错误地再次启动。180 项
+  Python、独立 C++ 状态机、差异检查与 UAC 构建通过。Alice 继续发现 Wi-Fi 模式左下标签
+  `输入来源` 显示为四个竖框；字库审计确认 `editorial_font_medium_14` 完整包含同位置使用的
+  `实时峰值` 与 `连接状态`，唯独缺少“输入来源”四字。现用 Google Fonts 官方 Noto Sans SC
+  Medium 只补入这四个 14 px 抗锯齿字形，原有 231 个字形逐字节不变；三种模式继续共用同一
+  字号、字重、位置和基线。新增字库约束后共 181 项 Python、独立 C++ 状态机、差异检查与
+  UAC 构建通过；最终候选 `firmware.bin` 为 5,088,528 bytes，SHA-256
+  `1a5f6b1309ebd93b73e0fcc87fae332009f86cf5cce8c9f6c55c982fcacbb593`。
+  Alice 授权更新后，Bridge 安装副本已与工作区 `app.py`、`typeless_client.py` 逐字节一致，
+  原有配置与令牌保留，LaunchAgent 重载后 `/healthz` 返回 `{"ok":true}`。固件已写入原厂
+  应用分区 `0x20000`，esptool 回读确认 `Hash of data verified`，未擦除 NVS；设备恢复为
+  `/dev/cu.usbmodemM5DASHMIC31`，Bridge 日志确认读取复位诊断并重新完成 USB 鉴权。等待真机
+  复测 Wi-Fi Typeless 的即时震动、LIVE / READY 启停和“输入来源”四字显示。Alice 随后在
+  Wi-Fi 模式连续完成三轮 Typeless 启动与停止，均能正常进入听写并顺利结束，未再出现迟到
+  ERROR、无法停止或 READY 回执迟缓；本项真机 PASS。
+- Alice 随后发现 Codex 完成动画只看见中心小对勾，原有大对勾铺满全屏的视觉高潮消失。
+  状态机审计确认半径扩张代码仍在，但 1700 ms 抵达全屏半径后立即开始淡出，且整段动画在
+  2000 ms 结束，真机整帧传输下没有稳定的全屏平台期。修复保留品牌图标 850 ms 前退场、
+  150 ms 空场与 1000 ms 小对勾起步不变；大对勾仍在 1700 ms 扩至全屏，新增 500 ms 的
+  100% 强度保持阶段，再用 400 ms 淡出，动画总长调整为 2600 ms。182 项 Python、独立 C++
+  状态机、差异检查与 UAC 构建通过；候选 `firmware.bin` 为 5,088,528 bytes，SHA-256
+  `6bec5c9a8dd9a0c81a6fd7b690e97a854bd15478cc573b575df66658a5f10336`。已写入原厂
+  `ota_0`（起点 `0x20000`），esptool 回执 `Hash of data verified`，未清除 NVS；设备恢复为
+  `/dev/cu.usbmodemM5DASHMIC31`，Bridge `/healthz` 返回 `{"ok":true}`，日志确认读取复位
+  诊断并重新完成 Dashboard USB 鉴权。等待下一次真实 Codex 完成事件目视确认全屏对勾
+  保持阶段。
 
 ## 回家后的首次连接顺序
 
@@ -907,18 +1037,127 @@ Bridge 只扫描 `obsidian.roots` 明确授权的 Markdown 根目录。默认根
 
 若首次刷入异常，先停止继续写入并记录串口与终端输出；保留原厂恢复路径，不擦除整片 Flash。
 
+## 2026-08-23：Bridge 辅助 HTTP OTA 软件候选
+
+- 对 C152 原厂分区表进行只读核验：`otadata 0xd000/0x2000`、`ota_0 0x20000/0x4f0000`、
+  `ota_1 0x510000/0x4f0000`。PlatformIO 已切换到同一张精确分区表，并把应用上限收紧为
+  5,177,344 bytes，避免继续用通用 16 MB 表误判容量。
+- Bridge 新增带原有 Dashboard Token 鉴权的 manifest 与不可变固件下载接口；发布脚本先检查
+  ESP 镜像魔数和分区容量，再按 SHA-256 原子落盘并更新 `current.json`。发布是显式动作；没有
+  候选时返回 `204`，不会把“Bridge 已更新”误当成“固件已发布”。
+- 手表仅在首页亮屏、Wi-Fi / Bridge 在线且没有计时、Typeless、完成动画或配置交互时检查；
+  未接 USB 还要求电量不少于 40%。固件流式写入当前未运行分区，同时核对响应身份、精确大小、
+  SHA-256 和 ESP 应用镜像；全部成功后才切换启动分区，新系统完成 `setup()` 后才确认有效。
+- USB 始终保留为首次安装与救援通道。救援脚本现会清空且仅清空 8 KiB `otadata`，再写入
+  `ota_0`；这样即使设备先前运行于 `ota_1`，也会启动救援镜像，同时 NVS 中的 Wi-Fi、Token
+  和设置继续保留。
+- 当前 UAC 候选编译通过，`firmware.bin` 为 5,099,312 bytes，距单分区上限余 78,032 bytes，
+  本轮最终构建 SHA-256 为 `1ab101a66d2f05063cb050af1991a49ef1c17c2af43ce1f97f60b54cbfe4166b`。
+  193 项 Python、独立 C++ 状态机、差异检查与完整 UAC 编译通过；真实构建产物在临时目录完成
+  发布、清单与落盘哈希复核。运行中的 Bridge 已更新到同一 OTA 实现，`/healthz` 返回正常，
+  鉴权 manifest 在正式目录无候选时返回 `204`。本条尚未通过 USB 装入首个 OTA 版本，也没有
+  向运行中的 Bridge 发布 OTA 候选，因此不会触发手表更新。HTTP + SHA-256 的边界是可信局域网
+  传输完整性，不是 TLS / 固件签名级来源认证。
+- Alice 连接 USB 后已完成首个 OTA-capable 固件安装：烧录脚本先将 `otadata 0xd000/0x2000`
+  恢复为空白，再把 5,099,312-byte 镜像写入 `ota_0 / 0x20000`；两段均由 esptool 回执
+  `Hash of data verified`，未擦除 NVS。设备随后重新枚举为
+  `/dev/cu.usbmodemM5DASHMIC31`，Bridge 重新完成 USB 鉴权，正式 OTA 目录仍无候选。
+  下一步需由 Alice 从程序选择器进入 Dashboard 首页，再显式发布测试候选，观察设备端
+  `VERIFY -> INSTALL -> RESTART` 和 `ota_0 -> ota_1`。
+- Alice 进入首页后完成首次真实 HTTP OTA。由于共享工作树中的 UI session 同时重新构建，正式
+  测试候选为 5,099,312 bytes、SHA-256
+  `0e4a4df4002ebba2db9cca9dee3261d8fe4799d01214dbc0ea7f3e465396ed98`，与 USB 基线不同；
+  Bridge 与发布目录中的镜像哈希逐字节一致。Bridge 审计日志确认手表先取得 manifest，再完整
+  下载固件；设备随后以软件重启原因 `3` 重新枚举，并重新完成 USB 鉴权。固件代码只会在
+  SHA-256、精确大小、ESP 镜像校验、`esp_ota_end` 与 `esp_ota_set_boot_partition` 全部成功后
+  执行该重启，因此本次 `ota_0 -> ota_1` 软件与真机链路 PASS；未再次进入 ROM 读取分区，避免
+  为取证打扰已成功启动的设备。测试 manifest 已改名为 `tested-20260823-0e4a4df4.json` 归档，
+  正式接口恢复 `204` 无候选待命，固件文件保留。
+- 首次 OTA 真机测试发现马达从开始一直振动到 100%。根因不是进度重复触发，而是固件下载
+  故意阻塞主循环，常规 `updateVibration()` 无法在 100 ms 截止点执行，导致开始脉冲直到下载
+  结束才被关闭；成功和失败反馈也存在同类延长风险。现将 OTA 生命周期反馈改为三个会显式
+  关马达的阻塞短脉冲：开始 100 ms、成功 180 ms、失败 220 ms，传输进度只绘屏且绝不调用
+  振动。194 项 Python、独立 C++ 状态机、差异检查与 UAC 编译通过；为避免共享 UI session
+  再次替换 `.pio` 产物，候选先冻结为 5,099,488 bytes、SHA-256
+  `db2ae1784326ca7f7e3a1b6435609b98018e36a87b132227674a1421ce3f95e0`，再从该不可变文件发布。
+  Bridge 曾短暂提供候选但尚未收到手表的新 manifest 请求；Alice 随即要求等待另一条 UI
+  session 完成首页实验，活动 manifest 已改名为 `draft-vibration-fix-db2ae178.json` 撤下，
+  固件文件与草稿均保留，接口恢复 `204` 无候选待命。首页定稿后再重新构建、冻结并发布合并
+  候选，避免用 OTA 抢跑未完成的 UI。
+- UI session 随后由 Alice 确认首页定稿：Codex 以 `8 -> 6`、Claude 以 `4 -> 6` 的短圆弧
+  表示周剩余额度，分别使用蓝色/浅蓝轨道与橙色/浅橙轨道。最终工作树同时保留上述首页和
+  OTA 离散振动修复；194 项 Python、独立 C++ 状态机、差异检查与 UAC 构建通过。为隔离后续
+  并行构建，正式候选冻结为 5,099,488 bytes、SHA-256
+  `23141db132624f9110bb6fe1efcf9973154838c9fee5a6b02b20c186597aa36d`，并仅从该不可变文件
+  发布。设备进入 Dashboard 首页后仍未请求；重启 Bridge 刷新 discovery / 在线状态后，手表
+  立即取得 manifest、完整下载固件并以软件重启原因 `3` 重新枚举，随后再次完成 USB 鉴权，
+  OTA 链路 PASS。活动 manifest 已归档为 `tested-20260823-23141db1.json`，接口恢复 `204`
+  无候选待命。等待 Alice 确认本轮体感是否为“开始短振、传输安静、结束短振”；同时将“需重启
+  Bridge 才触发 discovery”保留为后续调度小故障，不混同于本次传输或校验结果。
+- Alice 真机确认上述 `23141db1` 安装过程仍从 `VERIFY` 连续振动到完成，证明一次
+  `M5.Power.setVibration(0)` 在 OTA 阻塞与写 Flash 期间不能作为可靠的马达关断凭据。固件现
+  直接访问 M5IOE1 的 PWM1 寄存器 `0x1B/0x1C`：每次生命周期短振后重复写入 duty `0`、
+  disable，并要求连续三次 I2C 回读均为 `0x0000`；最多尝试 12 次，开始脉冲无法确认关闭时
+  显示 `MOTOR ERROR` 并拒绝进入固件下载。194 项 Python、独立 C++ 状态机、差异检查及完整
+  UAC 构建通过；冻结并发布的候选为 5,099,552 bytes、SHA-256
+  `07f4802cb6b17b18884752e0cc5e6e2e49fc9da29ec71273def88f6a1ba63b7b`。Bridge 日志确认
+  manifest、完整固件交付、软件重启及 USB 重新鉴权；Alice 随后真机确认 `VERIFY` 仅一次
+  轻振、下载与校验阶段安静、`COMPLETE/RESTART` 再一次轻振，本项实机 PASS。
+- UI session 继续定稿首页两侧 Provider 周额度圆弧：外端圆帽的可见边缘与天气 / 专注信息
+  胶囊上沿对齐；深色不再表示“剩余”，而直接使用 `weekUsedPercent` 表示本周已用量，并从
+  6 点方向向 Codex 左侧、Claude 右侧增长，浅色轨道表示剩余。OTA 马达三次回读保护保持不变。
+  194 项 Python、独立 C++ 状态机、差异检查与完整 UAC 构建通过；冻结候选为 5,099,536
+  bytes、SHA-256 `784082df1e14d8c36cc85d94d4b0ced06c07b17f2dbce067511b907c1e006344`。
+  Bridge 审计日志确认 manifest、固件完整交付、软件重启与 USB 重新鉴权均完成；等待 Alice
+  目视确认首页圆弧位置、颜色语义和 OTA 两次短振后再归档活动 manifest。
+- Alice 确认首页圆弧无误后发现两个跨状态图层问题。其一，从程序选择器进入 Dashboard 时，
+  首份 USB 状态把 `haveData` 置真，但连接页尚未换成完整 Clock；秒数局部刷新随即把绿色秒数
+  画布贴到“正在连接电脑”页。现在 USB / HTTP 首份状态均强制先完整绘制 Clock，只有已有
+  Clock 底图时才允许延后普通状态重绘。其二，OTA 页虽用深色填满 450 px 画布和 466 px
+  frameCanvas，但 Clock 遗留的 `editorialFrameAccentActive` 会在合成时再次把薄荷绿圆补进外围
+  8 px；OTA 绘制现显式清空强调圆与尖叫出血标志，独占整块物理帧。195 项 Python、独立 C++
+  状态机、差异检查及完整 UAC 构建通过；冻结候选为 5,099,632 bytes、SHA-256
+  `7d97273a5a425a5bd4a9199f76b587d1e405ac5b1b6bf7915096eea34ecf1d5a`。Bridge 日志确认
+  manifest、完整交付、软件重启及 USB 重新鉴权。连接页秒数可在本版直接真机复测；本轮 OTA
+  页面仍由旧固件绘制，外框修复需下一次 OTA 才能完成真机验证。
+
+## 2026-08-23：今日收束
+
+- **数据与文案**：首页和 Codex / Claude 用量从 `100M` 起统一换算为中文“亿”，并用同字号、
+  同字重、同基线的 Noto 子集解决混排锯齿；首页 `专` 改为跨 Bridge 重启保留、按本地日期归零
+  的 TickTick 今日累计分钟，Claude“累计”改为 Multi AI Usage Monitor 能回溯到的历史总量。
+- **Typeless 双模式**：插线时为 `USB MIC`，只在手表发起的听写期间临时接管系统输入；拔线但
+  Wi-Fi Bridge 在线时为 `MAC MIC`，仅远程启停 Typeless 并保留 Mac 麦克风。紧凑动作回执、
+  顺序队列、乐观状态与补齐字库共同修复迟到 `ERROR`、无法停止、反馈迟缓和竖框字形；Alice
+  已连续三轮真机验证 Wi-Fi 启停 PASS。
+- **触摸、动画与首页 UI**：扩大 AI 热点与 Obsidian 胶囊有效热区并补触摸振动；Codex / Claude
+  完成动画改为品牌图标先缩小退场，再让大对勾扩至全屏、保持后淡出，修复叠帧、四边露底与
+  首页读秒抢帧。首页新增以深色表示本周已用量、浅色表示剩余的 Codex / Claude 双侧短圆弧，
+  Alice 已确认圆弧视觉与语义。
+- **轻量 HTTP OTA**：Bridge 能显式发布不可变固件及鉴权 manifest；手表核对精确大小、
+  SHA-256 和 ESP 镜像后写入未运行的另一 OTA 分区，新系统完成启动才确认有效。USB 继续负责
+  首次安装与救援，救援仅重置 `otadata` 并写 `ota_0`，不擦除 NVS。真实 OTA 已完成
+  `ota_0 -> ota_1`，Alice 已确认 `VERIFY` 和 `COMPLETE/RESTART` 各一次轻振，中间传输安静。
+- **当前实机版本**：最新已安装镜像为 5,099,632 bytes，SHA-256
+  `7d97273a5a425a5bd4a9199f76b587d1e405ac5b1b6bf7915096eea34ecf1d5a`。195 项 Python、独立
+  C++ 状态机、`git diff --check` 与完整 UAC 构建通过；Bridge 已完整交付镜像、收到软件重启并
+  重新鉴权。连接页读秒修复可直接复测；OTA 外框修复必须在下一次 OTA 时由本版固件绘制页面，
+  因而仍属待实机验证。
+- **续航观察**：已开始 Wi-Fi、无 USB 的自然使用校准；当前首组观察为起始 99%，18:59 显示
+  92%。这只是曲线起点，尚不足以推导总续航或判定电量映射精度。
+
 ## 下一阶段
 
-1. 增加明确的本机配置层，不把朋友的城市、节点名称、网络或隐私选择当成默认值。
-2. 真机烧录后分别注入 `scream/alert/inbox` 测试事件，验证声音、震动、自动切页与不误叫。
-3. 在真机上校准字体、触摸热区、亮度、震动、声音、续航与麦克风质量。
-4. 真机通过后再评估 ArduinoOTA；USB 始终保留为首次烧录和救援通道。
-5. 真机联调第 7 屏的抽取、打开与晃动防连触，并观察当前权重是否符合实际惊喜感。
+1. 用下一次正常 OTA 目视验证深色更新页完整覆盖 466 px 物理外框，并复测程序选择器进入
+   Dashboard 时连接页不再残留首页读秒。
+2. 补做损坏镜像不切换、启动失败回滚和 USB 救援演练；USB 始终保留为最终救援通道。
+3. 继续记录 Wi-Fi、无 USB 的时间与电量，形成完整放电曲线后再校准百分比映射和续航策略。
+4. 分别注入 `scream/alert/inbox` 测试事件，验证声音、震动、自动切页、台账与不误叫。
+5. 增加明确的本机配置层，不把城市、节点名称、网络或隐私选择写死为公共默认值。
 
 ## Git 工作方式
 
-`upstream` 只跟踪朋友的公开仓库；等 Alice 创建自己的 GitHub Fork 后，再把个人仓库加为
-`origin`。本地修改在确认前不提交、不推送，个人密钥与生成物继续由 `.gitignore` 隔离。
-
-当前工作树包含另一条 UI 设计 session 的未提交改动。后端和文档工作必须使用精确文件
-清单，不能覆盖、回退或批量暂存那些改动。
+`origin` 是 Alice 的个人 Fork `isalicema/m5-stopwatch-dashboard`，本地统一在 `main` 开发；
+`upstream` 只跟踪好友 @Googler0825 的公开仓库。上游出现新功能时先审阅差异，再选择性合并
+到自己的 `main`，不把个人版本重新变成上游的镜像。个人密钥、机器配置、生成固件、构建缓存
+与编辑器编号备份继续由 `.gitignore` 隔离；共享工作树始终按精确清单暂存，不使用批量全选。

@@ -36,6 +36,20 @@ class FeaturePageTests(unittest.TestCase):
         self.assertIn("feature secondary action must stay inside the visual safe circle", self.interaction)
         self.assertIn("feature hero touch target must stay inside the physical circle", self.interaction)
 
+    def test_feature_footer_tolerates_fingertip_drift_without_stealing_swipes(self):
+        self.assertIn("kFeatureActionTouchY = 330", self.interaction)
+        self.assertIn("kFeatureActionTouchHeight = 78", self.interaction)
+        self.assertIn("kFeatureActionTapSlop = 32", self.interaction)
+        self.assertIn("dashboardFeatureTapAccepted", self.interaction)
+        self.assertIn("bool featureTap = (currentPage == 5 || currentPage == 6)", self.source)
+        self.assertIn("abs(touch.distanceX()) >= kSwipeThreshold", self.source)
+
+    def test_obsidian_open_has_clear_haptic_feedback(self):
+        self.assertIn(
+            'startVibration(action == "roll" ? 125 : 130, action == "roll" ? 90 : 90);',
+            self.source,
+        )
+
     def test_selected_raster_assets_are_used(self):
         self.assertIn("ai_hotspot_burst_png", self.source)
         self.assertIn("ai_hotspot_burst_source_png", self.source)
@@ -76,8 +90,31 @@ class FeaturePageTests(unittest.TestCase):
     def test_clock_overview_uses_multi_ai_daily_total(self):
         self.assertIn("struct AIUsageData", self.source)
         self.assertIn('JsonObject u = doc["ai_usage"]', self.source)
-        self.assertIn('" · AI" + usageText', self.source)
+        self.assertIn('"m · AI " + usageText', self.source)
         self.assertIn("aiUsage.todayTotalTokens", self.source)
+        self.assertIn("ticktick.todayFocusSeconds / 60", self.source)
+        self.assertIn('String(focusMinutes) + "m · AI "', self.source)
+        self.assertNotIn("int focusPercent = 0;", self.source)
+        self.assertIn("String formatChineseCountNumber(int64_t value)", self.source)
+        self.assertIn('snprintf(buffer, sizeof(buffer), "%.2f"', self.source)
+        self.assertIn("countUsesChineseHundredMillions", self.source)
+        self.assertIn("return value >= 100000000;", self.source)
+        self.assertIn('focusText += "亿";', self.source)
+        self.assertIn('canvas.drawString(focusText, 311, 303);', self.source)
+        self.assertNotIn('canvas.drawString("亿", left + prefixWidth, 303);', self.source)
+
+    def test_provider_usage_pills_share_the_chinese_hundred_million_formatter(self):
+        self.assertIn(
+            'drawEditorialMetricPill(52, "今日用量", provider.todayTokens,',
+            self.source,
+        )
+        self.assertIn(
+            'drawEditorialMetricPill(225, "累计", provider.lifetimeTokens,',
+            self.source,
+        )
+        self.assertIn('value += "亿";', self.source)
+        self.assertIn('canvas.drawString(value, x + 103, y + 34);', self.source)
+        self.assertNotIn('canvas.drawString("亿", left + numberWidth, y + 34);', self.source)
 
     def test_clock_shortcuts_do_not_overlap_the_information_pills(self):
         self.assertIn("constexpr int kClockActionTouchY = 340;", self.interaction)
@@ -100,8 +137,12 @@ class FeaturePageTests(unittest.TestCase):
         self.assertIn("DashboardClockRefresh::fullPage", self.source)
         self.assertIn("appMode == DashboardAppMode::dashboard", self.source)
         self.assertIn("overlayMode == OverlayMode::none", self.source)
-        self.assertIn("!completionAnimationActive(millis())", self.source)
+        self.assertIn("!completionAnimationRunning", self.source)
+        self.assertIn("bool hadDataBeforeUsbUpdate = haveData;", self.source)
+        self.assertIn("if (!hadDataBeforeUsbUpdate && haveData", self.source)
+        self.assertIn("bool hadDataBeforeFetch = haveData;", self.source)
         self.assertIn("bool deferClockStateRedraw", self.source)
+        self.assertIn("hadDataBeforeFetch && haveData", self.source)
         self.assertIn("if (!deferClockStateRedraw) drawCurrentPage();", self.source)
         self.assertIn("normal two-second state-sync redraw", self.source)
 

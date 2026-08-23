@@ -70,7 +70,11 @@ class DashboardStateTests(unittest.TestCase):
                 "connected": True,
                 "channels": [
                     {"id": "codex", "tokens": 500},
-                    {"id": "claude", "tokens": 400},
+                    {
+                        "id": "claude",
+                        "tokens": 400,
+                        "lifetime_tokens": 4_221_209_147,
+                    },
                 ],
                 "provider_quotas": {
                     "codex": {
@@ -104,6 +108,7 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(snapshot["codex"]["usage"]["today_tokens"], 500)
         self.assertEqual(snapshot["codex"]["limits"][0]["used_percent"], 20)
         self.assertEqual(snapshot["claude"]["today_tokens"], 400)
+        self.assertEqual(snapshot["claude"]["lifetime_tokens"], 4_221_209_147)
         self.assertEqual(snapshot["claude"]["week_used_percent"], 87)
 
 

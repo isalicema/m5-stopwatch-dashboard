@@ -14,6 +14,7 @@ ASSET_DIR = PROJECT / "design" / "assets"
 OUTPUT = PROJECT / "m5-dashboard" / "firmware" / "M5Dashboard" / "provider_brand_icons.h"
 FONT = PROJECT / "m5-dashboard" / "NotoSansCJKsc-Bold.otf"
 SIZE = 96
+COMPLETION_SIZES = (96, 80, 64, 48, 32)
 PERCENT_SIZE = 96
 PERCENT_ASSET = ASSET_DIR / "provider-percent-96.png"
 
@@ -38,11 +39,15 @@ def validate_png(path: Path) -> None:
             raise RuntimeError(f"{path} must be an indexed PNG with transparency")
 
 
-def rgb565_pixels(path: Path, background: tuple[int, int, int]) -> list[int]:
+def rgb565_pixels(
+    path: Path, background: tuple[int, int, int], size: int = SIZE
+) -> list[int]:
     validate_png(path)
     with Image.open(path) as opened:
         foreground = opened.convert("RGBA")
-    base = Image.new("RGBA", (SIZE, SIZE), (*background, 255))
+    if size != SIZE:
+        foreground = foreground.resize((size, size), Image.Resampling.LANCZOS)
+    base = Image.new("RGBA", (size, size), (*background, 255))
     flattened = Image.alpha_composite(base, foreground).convert("RGB")
     return [
         ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3)
@@ -115,6 +120,25 @@ def write_header(codex: Path, claude: Path, percent: Path, percent_size: tuple[i
                 "claude_brand_icon_rgb565",
                 rgb565_pixels(claude, (226, 122, 86)),
             ).rstrip(),
+            "",
+            "// Completion icons are pre-antialiased at each exit size and flattened",
+            "// onto the provider's dark animation background. This avoids runtime",
+            "// scaling noise while letting the icon fully leave before the check grows.",
+            *(
+                array_source(
+                    f"codex_completion_icon_{size}_rgb565",
+                    rgb565_pixels(codex, (7, 8, 17), size),
+                ).rstrip()
+                for size in COMPLETION_SIZES
+            ),
+            "",
+            *(
+                array_source(
+                    f"claude_completion_icon_{size}_rgb565",
+                    rgb565_pixels(claude, (15, 11, 9), size),
+                ).rstrip()
+                for size in COMPLETION_SIZES
+            ),
             "",
             "// The 96 px percent mark is a tight RGBA PNG. Its per-pixel alpha keeps",
             "// the edge smooth across both the paper background and provider accent.",

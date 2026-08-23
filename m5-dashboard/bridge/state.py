@@ -31,6 +31,10 @@ def _apply_usage_board_provider(
     )
     if not enriched.get("today_tokens") and channel:
         enriched["today_tokens"] = max(0, int(channel.get("tokens") or 0))
+    if provider_id == "claude" and not enriched.get("lifetime_tokens") and channel:
+        enriched["lifetime_tokens"] = max(
+            0, int(channel.get("lifetime_tokens") or 0)
+        )
     if provider_id == "codex":
         usage = enriched.setdefault("usage", {})
         if not usage.get("today_tokens") and channel:

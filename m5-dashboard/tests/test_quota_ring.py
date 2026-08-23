@@ -21,8 +21,8 @@ class QuotaRingTests(unittest.TestCase):
     def test_clock_uses_multi_ai_daily_total_instead_of_provider_quota(self):
         clock = function_source(self.source, "void drawClockPage(")
         self.assertIn("aiUsage.connected && aiUsage.complete", clock)
-        self.assertIn("formatCount(aiUsage.todayTotalTokens)", clock)
-        self.assertIn('" · AI" + usageText', clock)
+        self.assertIn("formatChineseCountNumber(aiUsage.todayTotalTokens)", clock)
+        self.assertIn('"m · AI " + usageText', clock)
         self.assertNotIn("clockUsagePercent", clock)
 
     def test_clock_uses_a_distinct_mint_identity_instead_of_ticktick_coral(self):
@@ -33,6 +33,45 @@ class QuotaRingTests(unittest.TestCase):
         self.assertIn("deviceCharging && useChargingAccent", self.source)
         self.assertIn("canvas.fillCircle(236, 303, 7, mint);", clock)
         self.assertNotIn("const uint16_t coral = rgb(255, 59, 48);", clock)
+
+    def test_clock_uses_summary_aligned_lower_arcs_for_weekly_provider_usage(self):
+        clock = function_source(self.source, "void drawClockPage(")
+        segment = function_source(self.source, "void drawClockProgressSegment(")
+        cap = function_source(self.source, "void drawClockProgressCap(")
+
+        self.assertIn(
+            "int codexWeekUsed = max(0, min(100, codex.weekUsedPercent));", clock
+        )
+        self.assertIn(
+            "int claudeWeekUsed = max(0, min(100, claude.weekUsedPercent));", clock
+        )
+        self.assertNotIn("dashboardRemainingPercent", clock)
+        self.assertIn("const uint16_t codexBlue = rgb(95, 103, 255);", clock)
+        self.assertIn("const uint16_t claudeOrange = rgb(226, 122, 86);", clock)
+        self.assertIn("const uint16_t codexTrack = rgb(200, 203, 255);", clock)
+        self.assertIn("const uint16_t claudeTrack = rgb(243, 198, 181);", clock)
+        self.assertNotIn("const uint16_t quotaTrack = rgb(94, 96, 91);", clock)
+        self.assertIn(
+            "drawClockProgressSegment(95.0f, 162.7f, codexWeekUsed, false",
+            clock,
+        )
+        self.assertIn(
+            "drawClockProgressSegment(17.3f, 85.0f, claudeWeekUsed, true",
+            clock,
+        )
+        self.assertIn("codexTrack, codexBlue", clock)
+        self.assertIn("claudeTrack, claudeOrange", clock)
+        self.assertIn("kClockQuotaArcOuterRadius", segment)
+        self.assertIn("kClockQuotaArcInnerRadius", segment)
+        self.assertIn("constexpr int kClockQuotaArcOuterRadius = 222;", self.source)
+        self.assertIn("constexpr int kClockQuotaArcInnerRadius = 208;", self.source)
+        self.assertIn("constexpr int kClockQuotaArcCapRadius = 7;", self.source)
+        self.assertIn("if (fillFromEnd)", segment)
+        self.assertIn("activeStart = endAngle - activeSweep", segment)
+        self.assertIn("activeEnd = startAngle + activeSweep", segment)
+        self.assertIn(
+            "canvas.fillSmoothCircle(x, y, kClockQuotaArcCapRadius, color)", cap
+        )
 
     def test_ai_editorial_layout_is_retained_behind_the_regression_gate(self):
         provider = function_source(self.source, "void drawProviderEditorialPage(")

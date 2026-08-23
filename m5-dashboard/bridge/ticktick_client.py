@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 import json
+import os
+from pathlib import Path
 import threading
 import time
 import urllib.request
@@ -14,6 +17,101 @@ ACTIONS = {
     "countdown-click",
     "countdown-end",
 }
+
+
+class DailyFocusLedger:
+    """Persist today's observed TickTick timer progress without double counting polls."""
+
+    def __init__(self, state_path: str = "") -> None:
+        self.path = Path(state_path).expanduser() if state_path else None
+        self._lock = threading.RLock()
+        self._last_save_monotonic = 0.0
+        self._data = self._load()
+
+    def _load(self) -> Dict[str, Any]:
+        if self.path is None:
+            return {}
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def _save(self) -> None:
+        if self.path is None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(
+            json.dumps(self._data, ensure_ascii=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, self.path)
+        self._last_save_monotonic = time.monotonic()
+
+    @staticmethod
+    def _progress(stopwatch: Dict[str, Any], countdown: Dict[str, Any]) -> tuple[int, int]:
+        stopwatch_seconds = max(0, int(stopwatch.get("elapsed_seconds") or 0))
+        duration = max(1, int(countdown.get("duration_seconds") or 1500))
+        remaining = max(0, min(duration, int(countdown.get("remaining_seconds") or 0)))
+        return stopwatch_seconds, duration - remaining
+
+    def update(
+        self,
+        stopwatch: Dict[str, Any],
+        countdown: Dict[str, Any],
+        date: Optional[str] = None,
+    ) -> int:
+        current_date = date or datetime.now().astimezone().date().isoformat()
+        stopwatch_progress, countdown_progress = self._progress(stopwatch, countdown)
+        with self._lock:
+            stored_date = str(self._data.get("date") or "")
+            force_save = False
+            if stored_date != current_date:
+                # Seed still-visible sessions on first installation. At a real
+                # midnight rollover, begin a clean day from current baselines.
+                first_observation = not stored_date
+                self._data = {
+                    "version": 1,
+                    "date": current_date,
+                    "total_seconds": (
+                        stopwatch_progress + countdown_progress if first_observation else 0
+                    ),
+                    "stopwatch_progress": stopwatch_progress,
+                    "countdown_progress": countdown_progress,
+                }
+                force_save = True
+            else:
+                total = max(0, int(self._data.get("total_seconds") or 0))
+                for key, current in (
+                    ("stopwatch_progress", stopwatch_progress),
+                    ("countdown_progress", countdown_progress),
+                ):
+                    previous = max(0, int(self._data.get(key) or 0))
+                    if current >= previous:
+                        total += current - previous
+                    else:
+                        # A lower value marks a new timer session. Count any
+                        # progress already made before this poll.
+                        total += current
+                        force_save = True
+                    self._data[key] = current
+                self._data["total_seconds"] = total
+            total_seconds = max(0, int(self._data.get("total_seconds") or 0))
+            if force_save or time.monotonic() - self._last_save_monotonic >= 15:
+                self._save()
+            return total_seconds
+
+    def total(self, date: Optional[str] = None) -> int:
+        current_date = date or datetime.now().astimezone().date().isoformat()
+        with self._lock:
+            if str(self._data.get("date") or "") != current_date:
+                return 0
+            return max(0, int(self._data.get("total_seconds") or 0))
+
+    def flush(self) -> None:
+        with self._lock:
+            self._save()
 
 
 def _timer(payload: Dict[str, Any], countdown: bool = False) -> Dict[str, Any]:
@@ -48,6 +146,7 @@ class TickTickMonitor(threading.Thread):
         self.timeout = max(0.2, min(5.0, float(config.get("timeout_seconds", 2))))
         self.refresh_seconds = max(0.25, float(config.get("refresh_seconds", 1)))
         self.duration_seconds = max(60, int(config.get("duration_seconds") or 1500))
+        self._daily_focus = DailyFocusLedger(str(config.get("daily_state_path") or ""))
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._state = self._offline("starting")
@@ -65,6 +164,7 @@ class TickTickMonitor(threading.Thread):
                 "last_error": "",
             },
             "updated_at": 0,
+            "today_focus_seconds": self._daily_focus.total(),
             "error": error,
         }
 
@@ -91,6 +191,9 @@ class TickTickMonitor(threading.Thread):
                 "updated_at": int(time.time()),
                 "error": "",
             }
+            state["today_focus_seconds"] = self._daily_focus.update(
+                state["stopwatch"], state["countdown"]
+            )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             with self._lock:
                 state = copy.deepcopy(self._state)
@@ -136,6 +239,7 @@ class TickTickMonitor(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._daily_focus.flush()
 
     def run(self) -> None:
         while not self._stop_event.is_set():

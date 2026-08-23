@@ -82,15 +82,23 @@ class InstallTests(unittest.TestCase):
             self.assertNotIn("bambu", installed)
             self.assertTrue(installed["ticktick"]["enabled"])
             self.assertEqual(installed["ticktick"]["duration_seconds"], 1500)
+            self.assertEqual(
+                installed["ticktick"]["daily_state_path"],
+                str(target / "ticktick-daily-focus.json"),
+            )
             self.assertEqual(installed["codex"]["hook_state_path"], str(target / "codex_hooks.json"))
             self.assertFalse(installed["codex"]["expose_transcript"])
             self.assertFalse(installed["claude"]["expose_transcript"])
             self.assertTrue(installed["ai_usage"]["enabled"])
             self.assertEqual(installed["ai_usage"]["base_url"], "http://127.0.0.1:8177")
+            self.assertEqual(installed["ai_usage"]["history_days"], 380)
             self.assertTrue(installed["ai_hotspot"]["enabled"])
             self.assertEqual(
                 installed["ai_hotspot"]["state_path"], str(target / "ai_hotspots.json")
             )
+            self.assertTrue(installed["ota"]["enabled"])
+            self.assertEqual(installed["ota"]["directory"], str(target / "ota"))
+            self.assertEqual(installed["ota"]["max_firmware_bytes"], 0x4F0000)
             self.assertTrue(installed["obsidian"]["enabled"])
             self.assertEqual(
                 installed["obsidian"]["roots"], [str(Path.home() / "Smart Workspace")]

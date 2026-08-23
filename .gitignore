@@ -6,6 +6,9 @@
 **/.flash-env/
 **/.pio/
 
+# Finder/editor numbered source backups are not firmware sources.
+**/M5Dashboard/M5Dashboard.ino [0-9]*.cpp
+
 # Machine-local configuration and credentials
 **/config.json
 **/bambu-cloud.json

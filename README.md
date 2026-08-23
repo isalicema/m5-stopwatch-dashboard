@@ -24,7 +24,7 @@
 | 2. TickTick 专注 | 把正计时和 25 分钟倒计时放在同一页 | A 控制正计时，B 控制倒计时；单击开始/暂停/继续，双击结束 |
 | 3. Codex | 显示当前状态、剩余额度、重置时间、今日与累计用量 | 有活动任务时轻触 Codex 图标查看详情；对话内容默认保持私密 |
 | 4. Claude Code | 显示 Claude Code 的活动、额度窗口与 Token 用量 | 有活动任务时轻触 Claude 图标查看详情；没有任务时保持安静 |
-| 5. Typeless | 把 StopWatch 变成 Mac 的 48 kHz USB 麦克风，并联动 Typeless 听写 | USB 与 Bridge 就绪后轻触中央开始/停止；只有手表发起的会话临时接管输入，结束后归还 Mac 原麦克风；断线时显示 `NO USB` 或 `NO BRIDGE` |
+| 5. Typeless | 插线时把 StopWatch 变成 48 kHz USB 麦克风，拔线时降级为 Mac 麦克风遥控器 | `USB MIC` 临时接管输入、结束后归还原麦克风；`MAC MIC` 经 Wi-Fi 启停 Typeless 并保留电脑麦克风；两条 Bridge 链路都不可用时显示 `NO BRIDGE` |
 | 6. AI 热点尖叫 | 监听 Codex Reset、AIHOT、DeepSeek、Kimi 与官方信源；重大模型、额度或安全事件才真正“尖叫” | 新热点会播放声音并震动；可点 `知道了` 确认，或点 `打开` 在 Mac 查看原文 |
 | 7. Obsidian 幸运笔记 | 从明确授权的知识库随机重遇一篇笔记 | 轻触骰子、点 `再摇` 或晃动设备重新抽取；点 `打开文档` 回到 Obsidian |
 
@@ -71,8 +71,13 @@
 
 仓库不跟踪预编译固件。可按 [固件构建说明](m5-dashboard/README.md#platformio) 自行编译；
 项目维护者也可以通过 [GitHub Releases](../../releases) 提供已验证的应用分区镜像。
-烧录脚本只应写入原厂分区表的 `ota_0`（起点 `0x20000`）；不要执行 `erase_flash`，否则会清除 NVS 中保存的
-Wi-Fi、令牌和设备设置。
+首次安装和故障救援仍使用 USB。救援脚本只重置原厂 `otadata` 并写入 `ota_0`
+（起点 `0x20000`），不会执行 `erase_flash`，因此 NVS 中保存的 Wi-Fi、令牌和设备设置会保留。
+
+首次用 USB 装入支持 OTA 的固件后，后续版本可由可信局域网内的 Bridge 提供。手表只在首页、
+亮屏且没有计时、听写或动画等交互时检查更新；候选镜像会流式写入当前未运行的另一 OTA 分区，
+并在大小、SHA-256 与 ESP 应用镜像三项校验全部通过后才切换启动分区。发布仍是显式动作，Bridge
+没有候选时不会更新。完整操作见 [HTTP OTA](m5-dashboard/README.md#5-http-ota)。
 
 ## 验证
 

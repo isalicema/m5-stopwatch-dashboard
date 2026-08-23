@@ -19,11 +19,16 @@
     <circle cx="233" cy="233" r="231" fill="#050505"/>
     <g clip-path="url(#round)">
       <circle cx="233" cy="233" r="225" fill="#f8f5ed"/><circle cx="364" cy="130" r="164" fill="#18e5a1"/>
+      <!-- Rounded arc edges align with the summary row; deep color grows from 6 o'clock as usage increases. -->
+      <path d="M26.3 292 A215 215 0 0 0 214.3 447.2" pathLength="100" fill="none" stroke="#c8cbff" stroke-width="14" stroke-linecap="round"/>
+      <path d="M439.7 292 A215 215 0 0 1 251.7 447.2" pathLength="100" fill="none" stroke="#f3c6b5" stroke-width="14" stroke-linecap="round"/>
+      <path d="M214.3 447.2 A215 215 0 0 1 26.3 292" pathLength="100" fill="none" stroke="#5f67ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="27 100"/>
+      <path d="M251.7 447.2 A215 215 0 0 0 439.7 292" pathLength="100" fill="none" stroke="#e27a56" stroke-width="14" stroke-linecap="round" stroke-dasharray="39 100"/>
       <text x="124" y="66" class="header">时钟</text><text x="124" y="96" class="header">总览</text><rect x="124" y="112" width="52" height="4" fill="#050505"/>
       <text x="368" y="87" text-anchor="middle" class="num" font-size="26" font-weight="760" fill="#050505">82%</text><text x="368" y="110" text-anchor="middle" font-size="14" font-weight="650" fill="#050505">充电中</text>
       <text x="26" y="239" class="num" font-size="104" font-weight="780" fill="#050505">21:08</text><text x="58" y="271" class="small">周五 · 8月21日</text>
       <g transform="translate(58 285)"><rect width="143" height="42" rx="21" fill="#050505"/><circle cx="23" cy="21" r="7" fill="#ffc400"/><text x="82" y="27" text-anchor="middle" font-size="18" font-weight="680" fill="#f8f5ed">晴 · 28℃</text></g>
-      <g transform="translate(213 285)"><rect width="179" height="42" rx="21" fill="#f8f5ed" stroke="#ffc400" stroke-width="2"/><circle cx="23" cy="21" r="7" fill="#18e5a1"/><text x="98" y="27" text-anchor="middle" font-size="14" font-weight="680" fill="#050505">专68 · C73 · A61</text></g>
+      <g transform="translate(213 285)"><rect width="179" height="42" rx="21" fill="#f8f5ed" stroke="#ffc400" stroke-width="2"/><circle cx="23" cy="21" r="7" fill="#18e5a1"/><text x="98" y="27" text-anchor="middle" font-size="14" font-weight="680" fill="#050505">专68m · AI 5.03亿</text></g>
       <g transform="translate(100 344)"><rect width="118" height="48" rx="24" fill="#050505"/><circle cx="24" cy="24" r="14" fill="#f8f5ed"/><path d="M18 24h12M24 18v12M19.5 19.5l9 9M28.5 19.5l-9 9" stroke="#050505" stroke-width="2"/><text x="78" y="31" text-anchor="middle" font-size="20" font-weight="720" fill="#f8f5ed">星盘</text></g>
       <g transform="translate(232 344)"><rect width="118" height="48" rx="24" fill="#f8f5ed" stroke="#ffc400" stroke-width="2"/><circle cx="24" cy="24" r="14" fill="#ffc400"/><circle cx="24" cy="24" r="6" fill="none" stroke="#050505" stroke-width="2"/><path d="M17 27c5 5 12 4 15-2" fill="none" stroke="#050505" stroke-width="2"/><text x="78" y="31" text-anchor="middle" font-size="20" font-weight="720" fill="#050505">成果</text></g>
     </g>

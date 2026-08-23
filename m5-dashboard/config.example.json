@@ -10,6 +10,11 @@
   },
   "peer_refresh_seconds": 2,
   "peers": [],
+  "ota": {
+    "enabled": true,
+    "directory": "~/Library/Application Support/M5Dashboard/ota",
+    "max_firmware_bytes": 5177344
+  },
   "weather": {
     "enabled": true,
     "city": "苏州",
@@ -25,7 +30,8 @@
     "timezone": "Asia/Shanghai",
     "refresh_seconds": 30,
     "timeout_seconds": 10,
-    "quota_timeout_seconds": 30
+    "quota_timeout_seconds": 30,
+    "history_days": 380
   },
   "ai_hotspot": {
     "enabled": true,
@@ -98,7 +104,8 @@
     "token": "",
     "timeout_seconds": 2,
     "refresh_seconds": 1,
-    "duration_seconds": 1500
+    "duration_seconds": 1500,
+    "daily_state_path": "~/Library/Application Support/M5Dashboard/ticktick-daily-focus.json"
   },
   "typeless": {
     "enabled": true,

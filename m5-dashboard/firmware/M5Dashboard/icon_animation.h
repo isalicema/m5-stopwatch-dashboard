@@ -36,13 +36,13 @@ inline uint8_t dashboardClaudeScalePercent(size_t frame) {
   return scales[frame % (sizeof(scales) / sizeof(scales[0]))];
 }
 
-constexpr uint32_t kDashboardCompletionDurationMs = 2000;
+constexpr uint32_t kDashboardCompletionFullHoldUntilMs = 2200;
+constexpr uint32_t kDashboardCompletionDurationMs = 2600;
 
 struct DashboardCompletionAnimationFrame {
   bool visible = false;
   uint16_t ringDegrees = 0;
-  uint8_t claudeIconScalePercent = 150;
-  uint8_t codexFrameIndex = 0;
+  int8_t providerIconStep = -1;
   uint16_t successRadius = 0;
   uint8_t intensityPercent = 100;
 };
@@ -66,22 +66,20 @@ inline DashboardCompletionAnimationFrame dashboardCompletionAnimationFrame(
                           ? 360
                           : static_cast<uint16_t>(elapsedMs * 360 / 1000);
 
-  if (elapsedMs < 180) {
-    frame.codexFrameIndex = 0;
-  } else if (elapsedMs < 330) {
-    frame.codexFrameIndex = 1;
-  } else if (elapsedMs < 500) {
-    frame.codexFrameIndex = 2;
-  } else {
-    frame.codexFrameIndex = 1;
-  }
-
-  if (elapsedMs < 280) {
-    frame.claudeIconScalePercent =
-        static_cast<uint8_t>(141 + elapsedMs * 15 / 280);
-  } else if (elapsedMs < 500) {
-    frame.claudeIconScalePercent =
-        static_cast<uint8_t>(156 - (elapsedMs - 280) * 6 / 220);
+  // The provider icon exits completely before the success check starts. The
+  // 150 ms empty beat prevents the first check frames from growing through
+  // the icon, which looked like two completion symbols drawn on top of one
+  // another on the physical display.
+  if (elapsedMs < 650) {
+    frame.providerIconStep = 0;
+  } else if (elapsedMs < 700) {
+    frame.providerIconStep = 1;
+  } else if (elapsedMs < 750) {
+    frame.providerIconStep = 2;
+  } else if (elapsedMs < 800) {
+    frame.providerIconStep = 3;
+  } else if (elapsedMs < 850) {
+    frame.providerIconStep = 4;
   }
 
   if (elapsedMs >= 1000 && elapsedMs < 1140) {
@@ -97,8 +95,16 @@ inline DashboardCompletionAnimationFrame dashboardCompletionAnimationFrame(
         58 + (kDashboardCompletionFullRadius - 58) * smooth / 1000);
   } else if (elapsedMs >= 1700) {
     frame.successRadius = kDashboardCompletionFullRadius;
-    frame.intensityPercent = static_cast<uint8_t>(
-        (kDashboardCompletionDurationMs - elapsedMs) * 100 / 300);
+    // Keep the full-screen check fully visible on the physical AMOLED before
+    // fading it. The old 300 ms immediate fade was shorter than a reliably
+    // perceived full-frame phase once rendering and display transfer time
+    // were included, so the animation appeared to stop at the small check.
+    if (elapsedMs >= kDashboardCompletionFullHoldUntilMs) {
+      frame.intensityPercent = static_cast<uint8_t>(
+          (kDashboardCompletionDurationMs - elapsedMs) * 100 /
+          (kDashboardCompletionDurationMs -
+           kDashboardCompletionFullHoldUntilMs));
+    }
   }
   return frame;
 }

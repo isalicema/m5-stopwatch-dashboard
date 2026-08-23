@@ -64,6 +64,7 @@ def normalize_ai_usage(
                 "id": channel_id,
                 "name": str(raw.get("name") or channel_id),
                 "tokens": channel_tokens,
+                "lifetime_tokens": _nonnegative_int(raw.get("total")),
                 "approximate": channel_id == "grok" and channel_tokens > 0,
             }
         )
@@ -157,7 +158,8 @@ def fetch_ai_usage(config: Dict[str, Any]) -> Dict[str, Any]:
     base_url = str(config.get("base_url") or "http://127.0.0.1:8177").rstrip("/")
     api_base = base_url if base_url.endswith("/api") else base_url + "/api"
     timeout = max(2, int(config.get("timeout_seconds", 10)))
-    query = urllib.parse.urlencode({"days": 1, "metric": "total"})
+    history_days = max(1, min(380, int(config.get("history_days", 380))))
+    query = urllib.parse.urlencode({"days": history_days, "metric": "total"})
     payload = _fetch_json(api_base + "/token-series?" + query, timeout)
     statuses = _fetch_json(api_base + "/status", timeout)
     normalized = normalize_ai_usage(

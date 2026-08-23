@@ -5,7 +5,9 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <esp32-hal-cpu.h>
+#include <esp_ota_ops.h>
 #include <esp_system.h>
+#include <mbedtls/sha256.h>
 #include <time.h>
 
 #include "ui_font_noto_sans_sc_16.h"
@@ -27,11 +29,11 @@
 #include "device_config.h"
 #include "app_shell_logic.h"
 #include "claude_icon.h"
-#include "codex_pet_frames.h"
 #include "feature_assets.h"
 #include "icon_animation.h"
 #include "icons.h"
 #include "interaction_logic.h"
+#include "ota_logic.h"
 #include "provider_brand_icons.h"
 #include "provisioning.h"
 
@@ -155,6 +157,7 @@ struct TickTickData {
   String countdownState = "idle";
   int countdownDuration = 1500;
   int countdownRemaining = 1500;
+  int todayFocusSeconds = 0;
   String error;
   uint32_t syncedAt = 0;
 };
@@ -226,6 +229,11 @@ constexpr uint16_t kDiscoveryLocalPort = 42101;
 String activeBridgeHost;
 uint16_t activeBridgePort = 8765;
 uint32_t lastFetchAt = 0;
+uint32_t lastOtaCheckAt = 0;
+constexpr uint32_t kOtaCheckIntervalMs = 60000;
+bool otaUpdateRunning = false;
+String installedOtaSha;
+String rejectedOtaSha;
 uint32_t lastWifiAttemptAt = 0;
 uint32_t wifiSearchStartedAt = 0;
 uint32_t wifiAttemptStartedAt = 0;
@@ -280,6 +288,7 @@ uint32_t lastHighPerformanceAt = 0;
 bool cpuLowPower = false;
 volatile bool voiceCaptureActive = false;
 bool voiceSessionActive = false;
+DashboardTypelessMode voiceSessionMode = DashboardTypelessMode::unavailable;
 bool aButtonTracking = false;
 bool aButtonConsumed = false;
 bool aButtonLongTriggered = false;
@@ -474,6 +483,10 @@ constexpr int kDashboardRingCenterX = 225;
 constexpr int kDashboardRingCenterY = 225;
 constexpr int kDashboardRingOuterRadius = 216;
 constexpr int kDashboardRingInnerRadius = 201;
+constexpr int kClockQuotaArcOuterRadius = 222;
+constexpr int kClockQuotaArcInnerRadius = 208;
+constexpr float kClockQuotaArcCenterRadius = 215.0f;
+constexpr int kClockQuotaArcCapRadius = 7;
 constexpr int kPageIndicatorY = 418;
 constexpr int kPageIndicatorActiveRadius = 3;
 static_assert(kPageIndicatorY + kPageIndicatorActiveRadius <
@@ -499,6 +512,10 @@ constexpr uint32_t kAutoWifiSearchTimeoutMs = 60000;
 constexpr uint32_t kUsbRequestIntervalMs = 2000;
 constexpr uint32_t kUsbReplyGraceMs = 500;
 constexpr uint32_t kUsbStateStaleMs = 6000;
+// A cold Typeless launch may use the Bridge's 5 second helper timeout plus
+// its readiness delay. Generic dashboard actions remain at 3 seconds, while
+// this one must not report ERROR after the Mac has already started dictation.
+constexpr uint16_t kTypelessHttpActionTimeoutMs = 8000;
 constexpr size_t kUsbRxQueueBytes = 4096;
 constexpr size_t kUsbMaxLineBytes = 32768 + 64;
 constexpr char kUsbRequestPrefix[] = "M5DASH_USB_V1|GET|";
@@ -531,7 +548,7 @@ void showConnectionStatus();
 void openWifiPicker();
 void openTranscript();
 void performObsidianAction(const String &action);
-void performTypelessAction(const String &action);
+bool performTypelessAction(const String &action, DashboardTypelessMode mode);
 bool overlayVisible();
 bool completionAnimationActive(uint32_t now);
 bool beginVoiceCapture();
@@ -573,10 +590,9 @@ int displayFrameOffsetY() {
   return dashboardCenteredOffset(M5.Display.height(), kUiFrameSize);
 }
 
-uint16_t currentRenderedBackground() {
+uint16_t currentRenderedBackground(uint32_t now) {
   if (appMode == DashboardAppMode::stopwatch) return rgb(0, 0, 0);
   if (appMode == DashboardAppMode::launcher) return editorialPaperColor();
-  uint32_t now = millis();
   if (completionAnimationActive(now)) {
     DashboardCompletionAnimationFrame frame = dashboardCompletionAnimationFrame(
         static_cast<uint32_t>(now - completionAnimationStartedAt));
@@ -963,6 +979,54 @@ void stopVibration() {
   lastVibrationPowerGuardAt = millis();
 }
 
+bool forceVibrationOffVerified() {
+  // M5Unified's StopWatch vibration helper performs a single unchecked I2C
+  // write. During a blocking OTA that write can be lost, leaving PWM1 latched
+  // at the previous duty until the main loop resumes. Write the IOE1 PWM1
+  // register directly and require several matching read-backs before allowing
+  // the flash transfer to begin.
+  constexpr uint8_t kMotorPwmRegister = 0x1B;
+  constexpr uint8_t kRequiredConfirmations = 3;
+  constexpr uint8_t kMaximumAttempts = 12;
+  const uint8_t disabledPwm[2] = {0x00, 0x00};
+  auto &ioe1 = M5.getIOExpander(0);
+  uint8_t confirmations = 0;
+
+  vibrationStopAt = 0;
+  for (uint8_t attempt = 0; attempt < kMaximumAttempts; ++attempt) {
+    // Keep the public API call as a fallback, then use the return-valued I2C
+    // path for the authoritative write and read-back.
+    M5.Power.setVibration(0);
+    uint8_t actualPwm[2] = {0xFF, 0xFF};
+    bool writeOk = ioe1.writeRegister(kMotorPwmRegister, disabledPwm,
+                                      sizeof(disabledPwm));
+    bool readOk = ioe1.readRegister(kMotorPwmRegister, actualPwm,
+                                    sizeof(actualPwm));
+    if (writeOk && readOk && actualPwm[0] == 0x00 && actualPwm[1] == 0x00) {
+      if (++confirmations >= kRequiredConfirmations) {
+        lastVibrationPowerGuardAt = millis();
+        return true;
+      }
+    } else {
+      confirmations = 0;
+    }
+    delay(10);
+  }
+  lastVibrationPowerGuardAt = millis();
+  return false;
+}
+
+bool pulseVibrationBlocking(uint8_t strength, uint16_t durationMs) {
+  // OTA transfer deliberately owns the main loop, so the normal
+  // updateVibration() deadline cannot stop a pulse until the transfer ends.
+  // Close these three lifecycle pulses and prove PWM1 is off before continuing.
+  startVibration(strength, durationMs);
+  delay(durationMs);
+  bool stopped = forceVibrationOffVerified();
+  delay(40);
+  return stopped;
+}
+
 void startCompletionAnimation(char provider, const String &source, size_t count) {
   if (screenLocked || configMode) return;
   uint32_t now = millis();
@@ -1080,8 +1144,9 @@ void setAmoledHardwareSleep(bool sleeping) {
 }
 
 void stopVoiceForStandby() {
-  if (voiceSessionActive) performTypelessAction("stop");
+  if (voiceSessionActive) performTypelessAction("stop", voiceSessionMode);
   voiceSessionActive = false;
+  voiceSessionMode = DashboardTypelessMode::unavailable;
 #if defined(M5DASH_USB_AUDIO)
   stopVoiceCaptureHardware();
 #else
@@ -1189,6 +1254,12 @@ bool typelessUsbAvailable() {
 #endif
 }
 
+DashboardTypelessMode availableTypelessMode() {
+  return dashboardTypelessMode(
+      typelessUsbAvailable(), WiFi.status() == WL_CONNECTED,
+      bridgeOnline && activeBridgeHost.length() > 0 && activeBridgePort > 0);
+}
+
 void drawBatteryStatusAt(uint16_t background, uint16_t normalColor,
                          int iconX, int iconY, bool useChargingAccent = true) {
   constexpr int iconWidth = 24;
@@ -1270,6 +1341,29 @@ String formatCount(int64_t value) {
   return String(buffer);
 }
 
+bool countUsesChineseHundredMillions(int64_t value) {
+  return value >= 100000000;
+}
+
+String formatChineseCountNumber(int64_t value) {
+  if (!countUsesChineseHundredMillions(value)) return formatCount(value);
+  char buffer[24];
+  double hundredMillions = static_cast<double>(value) / 100000000.0;
+  snprintf(buffer, sizeof(buffer), "%.2f", hundredMillions);
+  String result(buffer);
+  while (result.endsWith("0")) {
+    result.remove(result.length() - 1);
+  }
+  if (result.endsWith(".")) result.remove(result.length() - 1);
+  return result;
+}
+
+String formatChineseCount(int64_t value) {
+  String result = formatChineseCountNumber(value);
+  if (countUsesChineseHundredMillions(value)) result += "亿";
+  return result;
+}
+
 String formatThousands(int64_t value) {
   char digits[32];
   snprintf(digits, sizeof(digits), "%lld", static_cast<long long>(value));
@@ -1285,8 +1379,8 @@ String formatThousands(int64_t value) {
 }
 
 String formatLifetimeUsage(int64_t value) {
-  if (value >= 100000000) return String(value / 100000000) + "亿";
-  return formatThousands(value);
+  return countUsesChineseHundredMillions(value) ? formatChineseCount(value)
+                                                : formatThousands(value);
 }
 
 bool timerRunning(const String &state) {
@@ -1426,6 +1520,47 @@ void drawCodexIcon(uint16_t background) {
 void drawClaudeIcon(uint16_t background) {
   (void)background;
   drawProviderBrandIcon(claude_brand_icon_rgb565);
+}
+
+void drawCompletionProviderIcon(bool claudeProvider, int8_t step) {
+  const uint16_t *pixels = nullptr;
+  int size = 0;
+  switch (step) {
+    case 0:
+      pixels = claudeProvider ? claude_completion_icon_96_rgb565
+                              : codex_completion_icon_96_rgb565;
+      size = 96;
+      break;
+    case 1:
+      pixels = claudeProvider ? claude_completion_icon_80_rgb565
+                              : codex_completion_icon_80_rgb565;
+      size = 80;
+      break;
+    case 2:
+      pixels = claudeProvider ? claude_completion_icon_64_rgb565
+                              : codex_completion_icon_64_rgb565;
+      size = 64;
+      break;
+    case 3:
+      pixels = claudeProvider ? claude_completion_icon_48_rgb565
+                              : codex_completion_icon_48_rgb565;
+      size = 48;
+      break;
+    case 4:
+      pixels = claudeProvider ? claude_completion_icon_32_rgb565
+                              : codex_completion_icon_32_rgb565;
+      size = 32;
+      break;
+    default:
+      return;
+  }
+
+  bool previousSwap = canvas.getSwapBytes();
+  canvas.setSwapBytes(true);
+  canvas.pushImage(kDashboardRingCenterX - size / 2,
+                   kDashboardRingCenterY - size / 2,
+                   size, size, pixels);
+  canvas.setSwapBytes(previousSwap);
 }
 
 void drawMetric(const String &label, const String &value, int x, int labelY, int valueY,
@@ -1792,10 +1927,16 @@ void drawVoiceOverlay() {
   const uint16_t yellow = rgb(255, 196, 0);
   const uint16_t red = rgb(255, 76, 99);
   const uint16_t muted = rgb(106, 105, 101);
-  bool usbAvailable = typelessUsbAvailable();
-  uint16_t accent = !usbAvailable     ? muted
+  DashboardTypelessMode availableMode = availableTypelessMode();
+  DashboardTypelessMode displayMode =
+      voiceSessionActive ? voiceSessionMode : availableMode;
+  bool available = displayMode != DashboardTypelessMode::unavailable;
+  bool usbMode = displayMode == DashboardTypelessMode::usbMic;
+  bool macMode = displayMode == DashboardTypelessMode::macMic;
+  bool usbMeterActive = usbMode && voiceCaptureActive;
+  uint16_t accent = !available        ? muted
                     : voiceCaptureFailed ? red
-                    : voiceCaptureActive ? coral
+                    : voiceSessionActive ? coral
                                          : yellow;
 
   int16_t waveform[kVoiceWaveformPoints];
@@ -1804,6 +1945,10 @@ void drawVoiceOverlay() {
   memcpy(waveform, voiceWaveform, sizeof(waveform));
   levelPercent = voiceLevelPercent;
   portEXIT_CRITICAL(&voiceVisualMux);
+  if (!usbMeterActive) {
+    memset(waveform, 0, sizeof(waveform));
+    levelPercent = 0;
+  }
 
   int peakMagnitude = 0;
   for (size_t index = 0; index < kVoiceWaveformPoints; ++index) {
@@ -1816,33 +1961,38 @@ void drawVoiceOverlay() {
                    : -60;
   int meterPercent = constrain((peakDb + 60) * 100 / 60, 0, 100);
 
-  String title = !deviceUsbConnected ? "NO USB"
-                 : !usbAvailable     ? "NO BRIDGE"
-                 : voiceCaptureFailed ? "麦克风启动失败"
-                 : voiceCaptureActive ? "正在收音"
-                                      : "麦克风已关闭";
+  String modeLabel = usbMode ? "USB MIC"
+                     : macMode ? "MAC MIC"
+                               : "NO BRIDGE";
 #if !defined(M5DASH_USB_AUDIO)
-  title = "USB 未启用";
+  if (displayMode == DashboardTypelessMode::usbMic) modeLabel = "USB 未启用";
 #endif
 
   drawEditorialBackdrop(coral);
-  drawEditorialHeader("Typeless", title, ink);
+  // Keep the mode in the native 24 px header and the state in the native
+  // 80 px hero. "USB MIC / READY" and "MAC MIC / READY" therefore share
+  // exactly the same grid, weight and baseline instead of squeezing a long
+  // mixed-size phrase into the hero line.
+  drawEditorialHeader("Typeless", modeLabel, ink);
   canvas.setTextDatum(middle_left);
   canvas.setTextColor(ink);
   useEditorialHero80();
-  if (!usbAvailable && deviceUsbConnected) {
+  if (!available) {
     canvas.drawString("NO", 18, 170);
     canvas.drawString("BRIDGE", 18, 235);
   } else {
-    canvas.drawString(!usbAvailable ? "NO USB"
-                      : voiceCaptureFailed ? "ERROR"
-                      : voiceCaptureActive ? "LIVE" : "READY",
+    canvas.drawString(voiceCaptureFailed ? "ERROR"
+                      : voiceSessionActive ? "LIVE" : "READY",
                       18, 205);
   }
   canvas.setTextDatum(middle_left);
   canvas.setTextColor(muted);
   useEditorialMicro14();
-  if (usbAvailable) canvas.drawString("48 KHZ · USB", 58, 260);
+  if (usbMode) {
+    canvas.drawString("48 KHZ · USB", 58, 260);
+  } else if (macMode) {
+    canvas.drawString("BUILT-IN · WI-FI", 58, 260);
+  }
 
   drawMicrophoneIcon(325, 147, ink, coral);
 
@@ -1863,8 +2013,8 @@ void drawVoiceOverlay() {
     int currentY = waveCenterY - scaled;
     if (index > 0) {
       canvas.drawLine(previousX, previousY, currentX, currentY,
-                      voiceCaptureActive ? ink : muted);
-      if (voiceCaptureActive) {
+                      usbMeterActive ? ink : muted);
+      if (usbMeterActive) {
         canvas.drawLine(previousX, previousY + 1, currentX, currentY + 1,
                         rgb(112, 109, 102));
       }
@@ -1876,18 +2026,21 @@ void drawVoiceOverlay() {
   canvas.setTextDatum(middle_left);
   canvas.setTextColor(muted);
   useEditorialMicro14();
-  canvas.drawString("实时峰值", 60, 328);
+  canvas.drawString(usbMode ? "实时峰值" : macMode ? "输入来源" : "连接状态",
+                    60, 328);
   canvas.setTextDatum(middle_right);
   canvas.setTextColor(ink);
   canvas.setFont(&fonts::Font2);
   canvas.setTextSize(1);
-  canvas.drawString(String(peakDb) + " dBFS", 390, 328);
+  canvas.drawString(usbMode ? String(peakDb) + " dBFS"
+                    : macMode ? "MAC" : "--",
+                    390, 328);
 
   fillAntialiasedCapsule(kEditorialFooterX, kEditorialFooterY,
                          kEditorialFooterWidth, kEditorialFooterHeight, ink);
   canvas.fillCircle(kEditorialFooterX + 28,
                     kEditorialFooterY + kEditorialFooterHeight / 2, 15, accent);
-  if (voiceCaptureActive) {
+  if (voiceSessionActive) {
     canvas.fillRoundRect(kEditorialFooterX + 23, kEditorialFooterY + 21,
                          10, 10, 2, ink);
   } else {
@@ -1897,11 +2050,12 @@ void drawVoiceOverlay() {
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(background);
   useEditorialBold18();
-  String hint = !deviceUsbConnected ? "NO USB"
-                : !usbAvailable ? "NO BRIDGE"
+  String hint = !available ? "NO BRIDGE"
                 : voiceCaptureFailed ? "再按一次重试"
-                : voiceCaptureActive ? "轻触中央关闭麦克风"
-                                     : "轻触中央开启麦克风";
+                : voiceSessionActive && usbMode ? "轻触结束手表听写"
+                : voiceSessionActive && macMode ? "轻触结束电脑听写"
+                : usbMode ? "轻触使用手表麦克风"
+                          : "轻触使用电脑麦克风";
   canvas.drawString(hint, kEditorialFooterX + 137,
                     kEditorialFooterY + kEditorialFooterHeight / 2 + 1);
 }
@@ -2613,26 +2767,7 @@ void drawCompletionOverlay(uint32_t now) {
                    -90, -90 + frame.ringDegrees, accent);
   }
 
-  constexpr int completionIconCenterY = 208;
-  int iconSize = claudeProvider
-                     ? kCenterIconSize * frame.claudeIconScalePercent / 100
-                     : kCenterIconSize * 3 / 2;
-  int iconX = kDashboardRingCenterX - iconSize / 2;
-  int iconY = completionIconCenterY - iconSize / 2;
-  float iconScale = static_cast<float>(iconSize) / kCenterIconSize;
-  if (claudeProvider) {
-    canvas.fillRoundRect(iconX, iconY, iconSize, iconSize,
-                         iconSize * 22 / kCenterIconSize, accent);
-    canvas.drawPng(claude_mark_png, claude_mark_png_len,
-                   iconX, iconY, iconSize, iconSize,
-                   0, 0, iconScale, iconScale, datum_t::top_left);
-  } else {
-    const DashboardPngFrame &iconFrame =
-        codex_pet_done_frames[frame.codexFrameIndex];
-    canvas.drawPng(iconFrame.data, iconFrame.length,
-                   iconX, iconY, iconSize, iconSize,
-                   0, 0, iconScale, iconScale, datum_t::top_left);
-  }
+  drawCompletionProviderIcon(claudeProvider, frame.providerIconStep);
 
   if (frame.successRadius <= 0) return;
   uint16_t burstColor = completionMixedColor(
@@ -2772,7 +2907,7 @@ void drawEditorialHero(const String &value, int x, int y, int maxWidth,
   canvas.drawString(value, x, y);
 }
 
-void drawEditorialMetricPill(int x, const String &label, const String &value,
+void drawEditorialMetricPill(int x, const String &label, int64_t rawValue,
                              bool filled, uint16_t accent, uint16_t background,
                              uint16_t ink, uint16_t yellow) {
   constexpr int y = 282;
@@ -2791,6 +2926,10 @@ void drawEditorialMetricPill(int x, const String &label, const String &value,
   useEditorialMicro14();
   canvas.drawString(label, x + 103, y + 16);
   canvas.setTextColor(valueColor);
+  String value = formatChineseCountNumber(rawValue);
+  if (countUsesChineseHundredMillions(rawValue)) {
+    value += "亿";
+  }
   useEditorialBold18();
   canvas.drawString(value, x + 103, y + 34);
 }
@@ -2826,14 +2965,36 @@ void drawClockShortcutDock() {
   canvas.drawString("成果", kClockResultsActionX + 78, iconY + 1);
 }
 
-void drawClockProgressSegment(int startAngle, int endAngle, int percent,
-                              uint16_t track, uint16_t active) {
-  canvas.fillArc(225, 225, 216, 207, startAngle, endAngle, track);
+void drawClockProgressCap(float angle, uint16_t color) {
+  float radians = angle * PI / 180.0f;
+  int x = 225 + static_cast<int>(
+                    lroundf(cosf(radians) * kClockQuotaArcCenterRadius));
+  int y = 225 + static_cast<int>(
+                    lroundf(sinf(radians) * kClockQuotaArcCenterRadius));
+  canvas.fillSmoothCircle(x, y, kClockQuotaArcCapRadius, color);
+}
+
+void drawClockProgressSegment(float startAngle, float endAngle, int percent,
+                              bool fillFromEnd, uint16_t track,
+                              uint16_t active) {
+  canvas.fillArc(225, 225, kClockQuotaArcOuterRadius,
+                 kClockQuotaArcInnerRadius, startAngle, endAngle, track);
+  drawClockProgressCap(startAngle, track);
+  drawClockProgressCap(endAngle, track);
   int safePercent = max(0, min(100, percent));
   if (safePercent <= 0) return;
-  int activeEnd = startAngle +
-                  static_cast<int>((endAngle - startAngle) * safePercent / 100.0f + 0.5f);
-  canvas.fillArc(225, 225, 216, 207, startAngle, activeEnd, active);
+  float activeStart = startAngle;
+  float activeEnd = endAngle;
+  float activeSweep = (endAngle - startAngle) * safePercent / 100.0f;
+  if (fillFromEnd) {
+    activeStart = endAngle - activeSweep;
+  } else {
+    activeEnd = startAngle + activeSweep;
+  }
+  canvas.fillArc(225, 225, kClockQuotaArcOuterRadius,
+                 kClockQuotaArcInnerRadius, activeStart, activeEnd, active);
+  drawClockProgressCap(activeStart, active);
+  drawClockProgressCap(activeEnd, active);
 }
 
 void drawClockPage() {
@@ -2841,16 +3002,21 @@ void drawClockPage() {
   const uint16_t ink = rgb(5, 5, 5);
   const uint16_t mint = rgb(24, 229, 161);
   const uint16_t yellow = rgb(255, 196, 0);
+  const uint16_t codexTrack = rgb(200, 203, 255);
+  const uint16_t claudeTrack = rgb(243, 198, 181);
+  const uint16_t codexBlue = rgb(95, 103, 255);
+  const uint16_t claudeOrange = rgb(226, 122, 86);
   drawEditorialBackdrop(mint);
+  int codexWeekUsed = max(0, min(100, codex.weekUsedPercent));
+  int claudeWeekUsed = max(0, min(100, claude.weekUsedPercent));
+  // Deep provider color means consumed quota and grows outward from 6 o'clock.
+  drawClockProgressSegment(95.0f, 162.7f, codexWeekUsed, false,
+                           codexTrack, codexBlue);
+  drawClockProgressSegment(17.3f, 85.0f, claudeWeekUsed, true,
+                           claudeTrack, claudeOrange);
   drawEditorialHeader("时钟", "总览", ink);
 
-  int focusPercent = 0;
-  if (timerRunning(ticktick.countdownState) || timerPaused(ticktick.countdownState)) {
-    int duration = max(1, ticktick.countdownDuration);
-    focusPercent = 100 - currentCountdownRemaining() * 100 / duration;
-  } else if (timerRunning(ticktick.stopwatchState) || timerPaused(ticktick.stopwatchState)) {
-    focusPercent = min(100, currentStopwatchElapsed() * 100 / 5400);
-  }
+  int focusMinutes = max(0, ticktick.todayFocusSeconds / 60);
   struct tm local = {};
   bool timeReady = clockLocalTime(local);
   String timeText = "--:--";
@@ -2899,12 +3065,18 @@ void drawClockPage() {
   canvas.setTextColor(ink);
   useEditorialMicro14();
   String usageText = "--";
+  bool usageUsesHundredMillions = false;
   if (aiUsage.connected && aiUsage.complete) {
+    usageUsesHundredMillions =
+        countUsesChineseHundredMillions(aiUsage.todayTotalTokens);
     usageText = String(aiUsage.approximate ? "~" : "") +
-                formatCount(aiUsage.todayTotalTokens);
+                formatChineseCountNumber(aiUsage.todayTotalTokens);
   }
-  String focusText = "专" + String(max(0, min(100, focusPercent))) +
-                     " · AI" + usageText;
+  String focusText = "专" + String(focusMinutes) + "m · AI " + usageText;
+  if (usageUsesHundredMillions) {
+    focusText += "亿";
+  }
+  useEditorialMicro14();
   canvas.drawString(focusText, 311, 303);
   drawClockShortcutDock();
 }
@@ -3167,9 +3339,9 @@ void drawProviderEditorialPage(CodexData &provider, bool claudeProvider) {
   }
   markRenderDiagnostic(205, currentPage);
 
-  drawEditorialMetricPill(52, "今日用量", formatCount(provider.todayTokens),
+  drawEditorialMetricPill(52, "今日用量", provider.todayTokens,
                           true, accent, background, ink, yellow);
-  drawEditorialMetricPill(225, "累计", formatCount(provider.lifetimeTokens),
+  drawEditorialMetricPill(225, "累计", provider.lifetimeTokens,
                           false, accent, background, ink, yellow);
   markRenderDiagnostic(206, currentPage);
   drawProviderEditorialFooter(provider, mainReset, accent,
@@ -3218,8 +3390,9 @@ void drawRegressionSafeProviderPage(CodexData &provider, bool claudeProvider) {
              muted, foreground, false, metricLine);
   drawMetric("等待确认", String(provider.waiting), 346, 136, 169, 320, 372,
              muted, foreground, false, metricLine);
-  drawMetric("今日用量", formatCount(provider.todayTokens), 112, 267, 301, 81, 143,
-             muted, foreground, false, metricLine);
+  drawMetric("今日用量", formatChineseCount(provider.todayTokens), 112, 267, 301,
+             81, 143, muted, foreground,
+             countUsesChineseHundredMillions(provider.todayTokens), metricLine);
   if (!claudeProvider && showWeek && provider.shortUsedPercent >= 0) {
     drawMetric("五时剩余",
                String(dashboardRemainingPercent(provider.shortUsedPercent)) + "%",
@@ -3475,7 +3648,6 @@ void startProvisioning() {
   // dashboard alert into provisioning mode.
   if (voiceSessionActive) {
     endVoiceCapture();
-    voiceSessionActive = false;
   }
   stopVibration();
   stopTonePattern();
@@ -3687,17 +3859,17 @@ void drawLocalStopwatchPage() {
   canvas.drawString(footer, 225, kStopwatchFooterY);
 }
 
-void renderCurrentPage() {
+void renderCurrentPage(uint32_t now, uint16_t background) {
   editorialFrameAccentActive = false;
   editorialFrameBurstActive = false;
   if (appMode == DashboardAppMode::launcher) {
     drawAppLauncherPage();
-    composeRenderedFrame(currentRenderedBackground());
+    composeRenderedFrame(background);
     return;
   }
   if (appMode == DashboardAppMode::stopwatch) {
     drawLocalStopwatchPage();
-    composeRenderedFrame(currentRenderedBackground());
+    composeRenderedFrame(background);
     return;
   }
   markRenderDiagnostic(120, currentPage);
@@ -3719,15 +3891,21 @@ void renderCurrentPage() {
     drawObsidianDicePage();
   }
   drawOverlay();
-  drawCompletionOverlay(millis());
+  drawCompletionOverlay(now);
   markRenderDiagnostic(180, currentPage);
-  composeRenderedFrame(currentRenderedBackground());
+  composeRenderedFrame(background);
   markRenderDiagnostic(190, currentPage);
 }
 
 void drawCurrentPage() {
-  renderCurrentPage();
-  pushRenderedFrame(currentRenderedBackground());
+  // Sample the animation clock once for the whole physical frame. Taking a
+  // second millis() reading between the 450 px design canvas and the 466 px
+  // surround can cross the completion boundary and expose four paper-coloured
+  // points around an otherwise dark/accent animation frame.
+  uint32_t now = millis();
+  uint16_t background = currentRenderedBackground(now);
+  renderCurrentPage(now, background);
+  pushRenderedFrame(background);
   markRenderDiagnostic(0);
 }
 
@@ -4009,6 +4187,7 @@ bool applyDashboardState(JsonDocument &doc) {
   ticktick.countdownState = String(static_cast<const char *>(countdown["state"] | "idle"));
   ticktick.countdownDuration = countdown["duration_seconds"] | 1500;
   ticktick.countdownRemaining = countdown["remaining_seconds"] | ticktick.countdownDuration;
+  ticktick.todayFocusSeconds = t["today_focus_seconds"] | 0;
   ticktick.error = String(static_cast<const char *>(t["error"] | ""));
   ticktick.syncedAt = millis();
 
@@ -4148,6 +4327,256 @@ bool applyDashboardState(JsonDocument &doc) {
   return true;
 }
 
+void loadOtaPreferences() {
+  Preferences prefs;
+  if (!prefs.begin("m5dash-ota", true)) return;
+  installedOtaSha = prefs.getString("sha", "");
+  prefs.end();
+}
+
+bool saveInstalledOtaSha(const String &sha256) {
+  Preferences prefs;
+  if (!prefs.begin("m5dash-ota", false)) return false;
+  size_t written = prefs.putString("sha", sha256);
+  prefs.end();
+  if (written != sha256.length()) return false;
+  installedOtaSha = sha256;
+  return true;
+}
+
+void drawOtaStatus(const String &label, int percent) {
+  const uint16_t background = rgb(7, 8, 14);
+  const uint16_t accent = rgb(111, 117, 255);
+  // OTA owns the complete 466 px physical frame. The Clock page leaves its
+  // mint accent flag armed so normal page composition can extend that circle
+  // through the 8 px frame margin; clear both editorial bleed modes before
+  // composing this dark full-screen status surface.
+  editorialFrameAccentActive = false;
+  editorialFrameBurstActive = false;
+  canvas.fillScreen(background);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(accent);
+  useNumberFont();
+  canvas.drawString("OTA", 225, 154);
+  canvas.setTextColor(rgb(235, 236, 241));
+  canvas.drawString(label, 225, 220);
+  if (percent >= 0) {
+    canvas.setTextColor(rgb(166, 170, 185));
+    canvas.drawString(String(percent) + "%", 225, 275);
+    canvas.fillRoundRect(105, 313, 240, 10, 5, rgb(49, 52, 67));
+    int width = max(0, min(240, percent * 240 / 100));
+    if (width > 0) canvas.fillRoundRect(105, 313, width, 10, 5, accent);
+  }
+  composeRenderedFrame(background);
+  pushRenderedFrame(background);
+}
+
+bool fetchOtaManifest(String &sha256, size_t &imageSize, bool &available) {
+  available = false;
+  if (WiFi.status() != WL_CONNECTED || activeBridgeHost.length() == 0 ||
+      activeBridgePort == 0) {
+    return false;
+  }
+  String url = "http://" + activeBridgeHost + ":" + String(activeBridgePort) +
+               "/api/ota/manifest";
+  String tokens[2] = {settings.token, settings.token2};
+  int tokenOrder[2] = {activeTokenSlot == 1 ? 1 : 0, activeTokenSlot == 1 ? 0 : 1};
+  for (int orderIndex = 0; orderIndex < 2; ++orderIndex) {
+    int tokenIndex = tokenOrder[orderIndex];
+    if (tokens[tokenIndex].length() == 0 ||
+        (orderIndex > 0 && tokens[tokenIndex] == tokens[tokenOrder[0]])) {
+      continue;
+    }
+    HTTPClient http;
+    http.setTimeout(3000);
+    if (!http.begin(url)) return false;
+    http.addHeader("X-Dashboard-Token", tokens[tokenIndex]);
+    int statusCode = http.GET();
+    if (statusCode == HTTP_CODE_NO_CONTENT) {
+      http.end();
+      activeTokenSlot = tokenIndex;
+      return true;
+    }
+    if (statusCode == HTTP_CODE_OK) {
+      JsonDocument doc;
+      DeserializationError parseError = deserializeJson(doc, http.getStream());
+      http.end();
+      if (parseError || (doc["schema"] | 0) != 1) return false;
+      sha256 = String(static_cast<const char *>(doc["sha256"] | ""));
+      sha256.toLowerCase();
+      String releaseId = String(static_cast<const char *>(doc["release_id"] | ""));
+      imageSize = doc["size"] | static_cast<size_t>(0);
+      if (releaseId != sha256 ||
+          !dashboardOtaSha256Valid(sha256.c_str(), sha256.length()) ||
+          !dashboardOtaSizeValid(imageSize, kDashboardFactoryOtaPartitionSize)) {
+        return false;
+      }
+      activeTokenSlot = tokenIndex;
+      available = true;
+      return true;
+    }
+    http.end();
+    if (statusCode != HTTP_CODE_UNAUTHORIZED && statusCode != HTTP_CODE_FORBIDDEN) break;
+  }
+  return false;
+}
+
+bool streamOtaFirmware(const String &sha256, size_t imageSize) {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  const esp_partition_t *target = esp_ota_get_next_update_partition(nullptr);
+  if (target == nullptr || target == running ||
+      !dashboardOtaSizeValid(imageSize, target->size)) {
+    return false;
+  }
+
+  int tokenIndex = activeTokenSlot == 1 ? 1 : 0;
+  String token = tokenIndex == 1 ? settings.token2 : settings.token;
+  if (token.length() == 0) return false;
+  String url = "http://" + activeBridgeHost + ":" + String(activeBridgePort) +
+               "/api/ota/firmware/" + sha256;
+  HTTPClient http;
+  const char *headerKeys[] = {"X-Firmware-SHA256", "X-Firmware-Release"};
+  http.collectHeaders(headerKeys, 2);
+  http.setTimeout(10000);
+  if (!http.begin(url)) return false;
+  http.addHeader("X-Dashboard-Token", token);
+  int statusCode = http.GET();
+  if (statusCode != HTTP_CODE_OK || http.getSize() != static_cast<int>(imageSize) ||
+      http.header("X-Firmware-SHA256") != sha256 ||
+      http.header("X-Firmware-Release") != sha256) {
+    http.end();
+    return false;
+  }
+
+  esp_ota_handle_t handle = 0;
+  if (esp_ota_begin(target, imageSize, &handle) != ESP_OK) {
+    http.end();
+    return false;
+  }
+  uint8_t *buffer = static_cast<uint8_t *>(malloc(8192));
+  if (buffer == nullptr) {
+    esp_ota_abort(handle);
+    http.end();
+    return false;
+  }
+
+  mbedtls_sha256_context digest;
+  mbedtls_sha256_init(&digest);
+  bool digestReady = mbedtls_sha256_starts(&digest, 0) == 0;
+  bool writeOk = digestReady;
+  size_t received = 0;
+  int lastPercent = -1;
+  uint32_t lastDataAt = millis();
+  NetworkClient *stream = http.getStreamPtr();
+  while (writeOk && received < imageSize) {
+    size_t availableBytes = stream->available();
+    if (availableBytes == 0) {
+      if ((!http.connected() && received < imageSize) ||
+          static_cast<uint32_t>(millis() - lastDataAt) > 10000) {
+        writeOk = false;
+        break;
+      }
+      delay(2);
+      continue;
+    }
+    size_t wanted = min(static_cast<size_t>(8192), imageSize - received);
+    wanted = min(wanted, availableBytes);
+    size_t count = stream->readBytes(buffer, wanted);
+    if (count == 0) continue;
+    lastDataAt = millis();
+    if (mbedtls_sha256_update(&digest, buffer, count) != 0 ||
+        esp_ota_write(handle, buffer, count) != ESP_OK) {
+      writeOk = false;
+      break;
+    }
+    received += count;
+    int percent = static_cast<int>(received * 100 / imageSize);
+    if (percent / 5 != lastPercent / 5) {
+      lastPercent = percent;
+      drawOtaStatus("INSTALL", percent);
+    }
+    delay(1);
+  }
+
+  uint8_t actualDigest[32] = {};
+  if (!writeOk || received != imageSize ||
+      mbedtls_sha256_finish(&digest, actualDigest) != 0) {
+    writeOk = false;
+  }
+  mbedtls_sha256_free(&digest);
+  free(buffer);
+  http.end();
+
+  char actualHex[65] = {};
+  for (size_t index = 0; index < sizeof(actualDigest); ++index) {
+    snprintf(actualHex + index * 2, 3, "%02x", actualDigest[index]);
+  }
+  if (!writeOk || sha256 != String(actualHex)) {
+    esp_ota_abort(handle);
+    return false;
+  }
+  if (esp_ota_end(handle) != ESP_OK) return false;
+  // Persist the one-shot release marker before switching boot partitions. If
+  // the new image cannot boot, the surviving image will not repeatedly erase
+  // and retry the same bad candidate; USB remains the recovery path.
+  if (!saveInstalledOtaSha(sha256)) return false;
+  if (esp_ota_set_boot_partition(target) != ESP_OK) return false;
+  return true;
+}
+
+void updateHttpOta() {
+  if (otaUpdateRunning || static_cast<uint32_t>(millis() - lastOtaCheckAt) <
+                              kOtaCheckIntervalMs) {
+    return;
+  }
+  bool timerActive = timerRunning(ticktick.stopwatchState) ||
+                     timerRunning(ticktick.countdownState) ||
+                     localStopwatch.state == LocalStopwatchState::running;
+  bool voiceActive = voiceSessionActive || voiceCaptureActive;
+  if (appMode != DashboardAppMode::dashboard || currentPage != 0 ||
+      overlayMode != OverlayMode::none ||
+      !dashboardOtaCanStart(WiFi.status() == WL_CONNECTED, bridgeOnline,
+                            screenLocked, configMode, voiceActive, timerActive,
+                            completionAnimationRunning, deviceBatteryLevel,
+                            deviceUsbConnected)) {
+    return;
+  }
+  lastOtaCheckAt = millis();
+  String sha256;
+  size_t imageSize = 0;
+  bool available = false;
+  if (!fetchOtaManifest(sha256, imageSize, available) || !available ||
+      sha256 == installedOtaSha || sha256 == rejectedOtaSha) {
+    return;
+  }
+
+  otaUpdateRunning = true;
+  requireHighPerformance();
+  drawOtaStatus("VERIFY", 0);
+  if (!pulseVibrationBlocking(120, 100)) {
+    rejectedOtaSha = sha256;
+    drawOtaStatus("MOTOR ERROR", -1);
+    delay(1200);
+    otaUpdateRunning = false;
+    drawCurrentPage();
+    return;
+  }
+  bool installed = streamOtaFirmware(sha256, imageSize);
+  if (!installed) {
+    rejectedOtaSha = sha256;
+    drawOtaStatus("OTA ERROR", -1);
+    pulseVibrationBlocking(190, 220);
+    delay(980);
+    otaUpdateRunning = false;
+    drawCurrentPage();
+    return;
+  }
+  drawOtaStatus("RESTART", 100);
+  pulseVibrationBlocking(150, 180);
+  delay(320);
+  ESP.restart();
+}
+
 bool fetchState() {
   if (WiFi.status() != WL_CONNECTED) return false;
   if (activeBridgeHost.length() == 0 || activeBridgePort == 0 ||
@@ -4212,7 +4641,7 @@ void sendUsbDashboardAction(const String &action) {
   lastUsbRequestAt = millis();
 }
 
-bool sendHttpDashboardAction(const String &path) {
+bool sendHttpDashboardAction(const String &path, uint16_t timeoutMs = 3000) {
   if (WiFi.status() != WL_CONNECTED || activeBridgeHost.length() == 0 ||
       activeBridgePort == 0) {
     return false;
@@ -4224,7 +4653,7 @@ bool sendHttpDashboardAction(const String &path) {
     int tokenIndex = tokenOrder[orderIndex];
     if (tokens[tokenIndex].length() == 0) continue;
     HTTPClient http;
-    http.setTimeout(3000);
+    http.setTimeout(timeoutMs);
     if (!http.begin(url)) return false;
     http.addHeader("X-Dashboard-Token", tokens[tokenIndex]);
     http.addHeader("Content-Type", "application/json");
@@ -4236,6 +4665,10 @@ bool sendHttpDashboardAction(const String &path) {
       if (parseError) return false;
       activeTokenSlot = tokenIndex;
       bridgeOnline = true;
+      // POST actions now return a tiny {"ok":true} acknowledgement. Older
+      // bridges returned a full state snapshot, so retain that fallback while
+      // installations roll forward.
+      if (doc["ok"].is<bool>()) return doc["ok"].as<bool>();
       return applyDashboardState(doc);
     }
     http.end();
@@ -4280,7 +4713,7 @@ void performObsidianAction(const String &action) {
   requireHighPerformance();
   currentPage = 6;
   overlayMode = OverlayMode::none;
-  startVibration(action == "roll" ? 125 : 70, action == "roll" ? 90 : 40);
+  startVibration(action == "roll" ? 125 : 130, action == "roll" ? 90 : 90);
   String wireAction = action == "open" ? "obsidian-open" : "obsidian-roll";
   if (usbBridgeOnline) {
     sendUsbDashboardAction(wireAction);
@@ -4291,13 +4724,24 @@ void performObsidianAction(const String &action) {
   drawCurrentPage();
 }
 
-void performTypelessAction(const String &action) {
+bool performTypelessAction(const String &action, DashboardTypelessMode mode) {
+  if (mode == DashboardTypelessMode::unavailable) return false;
   String wireAction = action == "start" ? "typeless-start" : "typeless-stop";
+  if (mode == DashboardTypelessMode::usbMic && usbBridgeOnline) {
+    sendUsbDashboardAction(wireAction);
+    return true;
+  }
+  if (mode == DashboardTypelessMode::macMic) {
+    return sendHttpDashboardAction(
+        action == "start" ? "/api/typeless/start-mac" : "/api/typeless/stop",
+        kTypelessHttpActionTimeoutMs);
+  }
   if (usbBridgeOnline) {
     sendUsbDashboardAction(wireAction);
+    return true;
   } else {
-    sendHttpDashboardAction(action == "start" ? "/api/typeless/start"
-                                                : "/api/typeless/stop");
+    return sendHttpDashboardAction(action == "start" ? "/api/typeless/start"
+                                                       : "/api/typeless/stop");
   }
 }
 
@@ -4646,7 +5090,9 @@ void changePage(int delta) {
   markRenderDiagnostic(110, nextPage);
   currentPage = nextPage;
   overlayMode = OverlayMode::none;
-  renderCurrentPage();
+  uint32_t renderNow = millis();
+  uint16_t renderBackground = currentRenderedBackground(renderNow);
+  renderCurrentPage(renderNow, renderBackground);
   markRenderDiagnostic(130, nextPage);
 
   constexpr int frameCount = 10;
@@ -4660,7 +5106,7 @@ void changePage(int delta) {
     int numerator = frame * frame * (3 * frameCount - 2 * frame);
     int offset = displayWidth * numerator / (frameCount * frameCount * frameCount);
     M5.Display.startWrite();
-    fillDisplayFrameMargins(currentRenderedBackground());
+    fillDisplayFrameMargins(renderBackground);
     if (direction > 0) {
       transitionCanvas.pushSprite(displayOffsetX - offset, displayOffsetY);
       frameCanvas.pushSprite(displayOffsetX + displayWidth - offset, displayOffsetY);
@@ -4672,7 +5118,7 @@ void changePage(int delta) {
     delay(frameDurationMs);
   }
   markRenderDiagnostic(160, nextPage);
-  pushRenderedFrame(currentRenderedBackground());
+  pushRenderedFrame(renderBackground);
   startVibration(65, 30);
   markRenderDiagnostic(0);
 }
@@ -4725,6 +5171,12 @@ void updateGestureControl(const m5::touch_detail_t &touch) {
 
 void finishTouchGesture(const m5::touch_detail_t &touch) {
   DashboardGesture finishedGesture = activeGesture;
+  bool featureTap = (currentPage == 5 || currentPage == 6) &&
+                    dashboardFeatureTapAccepted(
+                        finishedGesture, touch.distanceX(), touch.distanceY());
+  bool ordinaryTap = finishedGesture == DashboardGesture::none &&
+                     abs(touch.distanceX()) < kGestureLockThreshold &&
+                     abs(touch.distanceY()) < kGestureLockThreshold;
   if (finishedGesture == DashboardGesture::page &&
       abs(touch.distanceX()) >= kSwipeThreshold) {
     changePage(touch.distanceX() < 0 ? 1 : -1);
@@ -4740,9 +5192,7 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
                        sizeof(kVolumePreviewTone) / sizeof(kVolumePreviewTone[0]));
     }
     drawCurrentPage();
-  } else if (finishedGesture == DashboardGesture::none &&
-             abs(touch.distanceX()) < kGestureLockThreshold &&
-             abs(touch.distanceY()) < kGestureLockThreshold) {
+  } else if (ordinaryTap || featureTap) {
     int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
     int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
     if (currentPage == 1) {
@@ -5515,8 +5965,11 @@ void stopVoiceCaptureHardware() {
 }
 
 void endVoiceCapture() {
-  if (voiceSessionActive) performTypelessAction("stop");
+  DashboardTypelessMode endedMode = voiceSessionMode;
+  bool shouldStopRemote = voiceSessionActive;
   voiceSessionActive = false;
+  voiceSessionMode = DashboardTypelessMode::unavailable;
+  voiceCaptureFailed = false;
 #if defined(M5DASH_USB_AUDIO)
   // Invalidate the PCM stream first, then leave the microphone UI immediately.
   // I2S/task cleanup can take a few hundred milliseconds, but it no longer
@@ -5526,8 +5979,12 @@ void endVoiceCapture() {
   voiceCaptureActive = false;
   overlayMode = OverlayMode::none;
   overlayUntilAt = 0;
-  startVibration(70, 35);
+  startVibration(105, 70);
   drawCurrentPage();
+  // Give the user the visible and tactile stop acknowledgement before any
+  // network work. The Bridge queues the Typeless toggle and responds with a
+  // compact acknowledgement, so READY no longer waits behind macOS.
+  if (shouldStopRemote) performTypelessAction("stop", endedMode);
 #if defined(M5DASH_USB_AUDIO)
   finishVoiceCaptureHardware(hadCapture);
 #endif
@@ -5535,13 +5992,35 @@ void endVoiceCapture() {
 
 void toggleVoiceSession() {
   if (!voiceSessionActive) {
-    if (!typelessUsbAvailable()) {
+    DashboardTypelessMode mode = availableTypelessMode();
+    if (mode == DashboardTypelessMode::unavailable) {
       startVibration(45, 24);
       drawCurrentPage();
       return;
     }
-    voiceSessionActive = beginVoiceCapture();
-    if (voiceSessionActive) performTypelessAction("start");
+    voiceCaptureFailed = false;
+    voiceSessionMode = mode;
+    if (mode == DashboardTypelessMode::usbMic) {
+      voiceSessionActive = beginVoiceCapture();
+      if (voiceSessionActive) performTypelessAction("start", mode);
+    } else {
+      voiceCaptureActive = false;
+      // The local session owns the control intent immediately. This makes the
+      // first tap vibrate and show LIVE at once, and it preserves STOP as the
+      // next action even if the HTTP acknowledgement is lost after Typeless
+      // has already started on the Mac.
+      voiceSessionActive = true;
+      startVibration(55, 28);
+      drawCurrentPage();
+      bool acknowledged = performTypelessAction("start", mode);
+      if (!acknowledged) {
+        voiceCaptureFailed = true;
+        startVibration(185, 160);
+      } else {
+        startVibration(120, 90);
+      }
+      drawCurrentPage();
+    }
     return;
   }
 
@@ -5549,15 +6028,18 @@ void toggleVoiceSession() {
 }
 
 void updateVoiceAudio() {
-  static bool usbAvailabilityInitialized = false;
-  static bool previousUsbAvailability = false;
-  bool usbAvailable = typelessUsbAvailable();
-  if (!usbAvailabilityInitialized) {
-    usbAvailabilityInitialized = true;
-    previousUsbAvailability = usbAvailable;
-  } else if (usbAvailable != previousUsbAvailability) {
-    previousUsbAvailability = usbAvailable;
-    if (voiceSessionActive && !usbAvailable) {
+  static bool availabilityInitialized = false;
+  static DashboardTypelessMode previousAvailableMode =
+      DashboardTypelessMode::unavailable;
+  DashboardTypelessMode availableMode = availableTypelessMode();
+  if (!availabilityInitialized) {
+    availabilityInitialized = true;
+    previousAvailableMode = availableMode;
+  } else if (availableMode != previousAvailableMode) {
+    previousAvailableMode = availableMode;
+    if (voiceSessionActive &&
+        voiceSessionMode == DashboardTypelessMode::usbMic &&
+        availableMode != DashboardTypelessMode::usbMic) {
       endVoiceCapture();
       return;
     }
@@ -5568,6 +6050,7 @@ void updateVoiceAudio() {
   }
   if (voiceSessionActive && voiceCaptureFailed && !voiceCaptureActive) {
     voiceSessionActive = false;
+    voiceSessionMode = DashboardTypelessMode::unavailable;
 #if defined(M5DASH_USB_AUDIO)
     stopVoiceCaptureHardware();
 #endif
@@ -5663,6 +6146,7 @@ void setup() {
   disableBottomLed();
   M5.Display.setRotation(0);
   loadUiPreferences();
+  loadOtaPreferences();
   // M5.begin() initializes the internal speaker by default. The dashboard is
   // silent most of the time, so leave the codec and PA off until a tone starts.
   disableSpeakerOutput();
@@ -5725,6 +6209,11 @@ void setup() {
     drawCurrentPage();
     if (shouldOpenSavedWifiPicker) openWifiPicker();
   }
+  // A freshly installed OTA image is accepted only after the complete device
+  // setup path has succeeded. Factory bootloaders without rollback support
+  // simply return a harmless status here.
+  esp_ota_mark_app_valid_cancel_rollback();
+  lastOtaCheckAt = millis();
 }
 
 void loop() {
@@ -5738,6 +6227,7 @@ void loop() {
   updateDevicePower();
   if (usbAudioStreaming) requireHighPerformance();
   updateCpuPolicy();
+  updateHttpOta();
   if (screenLocked) {
     // Keep the lightweight data plane alive with the AMOLED, touch controller
     // and microphone asleep. State updates can therefore trigger an audible
@@ -5843,7 +6333,6 @@ void loop() {
     bButtonConsumed = true;
     if (voiceSessionActive) {
       endVoiceCapture();
-      voiceSessionActive = false;
     }
     if (!aButtonPressed && !bButtonPressed) {
       configChordActive = false;
@@ -5887,7 +6376,16 @@ void loop() {
   }
 
   markProviderLoopDiagnostic(630);
+  bool hadDataBeforeUsbUpdate = haveData;
   updateUsbBridge();
+  if (!hadDataBeforeUsbUpdate && haveData &&
+      appMode == DashboardAppMode::dashboard && currentPage == 0 &&
+      overlayMode == OverlayMode::none && !completionAnimationRunning) {
+    // The launcher can enter Dashboard before the first USB state reply. The
+    // screen then contains drawConnectingPage(), not the Clock surface. Paint
+    // the complete Clock once before its seconds-only patch is allowed to run.
+    drawCurrentPage();
+  }
   markProviderLoopDiagnostic(631);
   connectWifi();
   markProviderLoopDiagnostic(632);
@@ -5906,7 +6404,7 @@ void loop() {
   uint32_t tickSecond = millis() / 1000;
   if (haveData && appMode == DashboardAppMode::dashboard && currentPage == 0 &&
       overlayMode == OverlayMode::none &&
-      !completionAnimationActive(millis())) {
+      !completionAnimationRunning) {
     struct tm clockNow = {};
     if (clockLocalTime(clockNow)) {
       int minuteKey = clockNow.tm_hour * 60 + clockNow.tm_min;
@@ -5929,6 +6427,7 @@ void loop() {
   if (millis() - lastFetchAt >= dashboardStateRefreshInterval() &&
       !usbReplyPending(millis(), lastUsbRequestAt, kUsbReplyGraceMs)) {
     lastFetchAt = millis();
+    bool hadDataBeforeFetch = haveData;
     if (!usbBridgeOnline && !fetchState()) bridgeOnline = false;
     // The Clock page owns a once-per-second patch renderer. Do not undo that
     // work with the normal two-second state-sync redraw; the next minute
@@ -5936,8 +6435,9 @@ void loop() {
     // and battery changes. Overlays and completion animations still redraw
     // immediately because they replace the base clock surface.
     bool deferClockStateRedraw =
-        haveData && appMode == DashboardAppMode::dashboard && currentPage == 0 &&
-        overlayMode == OverlayMode::none && !completionAnimationActive(millis());
+        hadDataBeforeFetch && haveData &&
+        appMode == DashboardAppMode::dashboard && currentPage == 0 &&
+        overlayMode == OverlayMode::none && !completionAnimationRunning;
     if (!deferClockStateRedraw) drawCurrentPage();
   }
   markProviderLoopDiagnostic(699);

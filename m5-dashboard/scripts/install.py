@@ -85,6 +85,7 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
     ticktick.setdefault("enabled", True)
     ticktick.setdefault("base_url", "http://127.0.0.1:8787")
     ticktick.setdefault("duration_seconds", 1500)
+    ticktick["daily_state_path"] = str(p["target"] / "ticktick-daily-focus.json")
     typeless = config.setdefault("typeless", {})
     typeless.setdefault("enabled", True)
     typeless["helper_path"] = str(
@@ -118,6 +119,7 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
     ai_usage.setdefault("refresh_seconds", 30)
     ai_usage.setdefault("timeout_seconds", 10)
     ai_usage.setdefault("quota_timeout_seconds", 30)
+    ai_usage.setdefault("history_days", 380)
     ai_hotspot = config.setdefault("ai_hotspot", {})
     ai_hotspot.setdefault("enabled", True)
     ai_hotspot.setdefault("refresh_seconds", 60)
@@ -135,6 +137,10 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
             {"name": "Google AI", "url": "https://blog.google/technology/ai/rss/"},
         ],
     )
+    ota = config.setdefault("ota", {})
+    ota.setdefault("enabled", True)
+    ota["directory"] = str(p["target"] / "ota")
+    ota.setdefault("max_firmware_bytes", 0x4F0000)
     obsidian = config.setdefault("obsidian", {})
     obsidian.setdefault("enabled", True)
     obsidian.setdefault("roots", [str(Path.home() / "Smart Workspace")])

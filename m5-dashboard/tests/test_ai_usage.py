@@ -19,7 +19,12 @@ class AIUsageTests(unittest.TestCase):
                     },
                 },
                 "channels": [
-                    {"id": "claude", "name": "Claude Code", "daily": [20_480]},
+                    {
+                        "id": "claude",
+                        "name": "Claude Code",
+                        "daily": [20_480],
+                        "total": 4_221_209_147,
+                    },
                     {"id": "codex", "name": "Codex", "daily": [517_407_867]},
                     {"id": "kimi", "name": "Kimi Code", "daily": [0]},
                     {"id": "deepseek", "name": "DeepSeek", "daily": [0]},
@@ -38,6 +43,8 @@ class AIUsageTests(unittest.TestCase):
         self.assertEqual(result["today_total_tokens"], 518_089_323)
         self.assertEqual(result["today_authoritative_tokens"], 21_093_819)
         self.assertEqual(result["breakdown"]["cache_read"], 496_987_338)
+        claude = next(item for item in result["channels"] if item["id"] == "claude")
+        self.assertEqual(claude["lifetime_tokens"], 4_221_209_147)
         self.assertFalse(result["approximate"])
         self.assertEqual(result["updated_at"], 123)
 

@@ -1,0 +1,11 @@
+# Exact partition table read from the M5Stack StopWatch C152 factory flash.
+# Keep USB recovery writes on ota_0 at 0x20000; runtime HTTP OTA alternates
+# between ota_0 and ota_1 through the ESP-IDF OTA data partition.
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x4000,
+otadata,   data, ota,     0xd000,   0x2000,
+phy_init,  data, phy,     0xf000,   0x1000,
+ota_0,     app,  ota_0,   0x20000,  0x4f0000,
+ota_1,     app,  ota_1,   0x510000, 0x4f0000,
+storage,   data, 0x81,    0xa00000, 0x400000,
+coredump,  data, coredump,0xe00000, 0x10000,

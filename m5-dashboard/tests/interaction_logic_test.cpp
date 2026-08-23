@@ -3,8 +3,22 @@
 #include "../firmware/M5Dashboard/app_shell_logic.h"
 #include "../firmware/M5Dashboard/icon_animation.h"
 #include "../firmware/M5Dashboard/interaction_logic.h"
+#include "../firmware/M5Dashboard/ota_logic.h"
 
 int main() {
+  assert(dashboardOtaSha256Valid(
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", 64));
+  assert(!dashboardOtaSha256Valid(
+      "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef", 64));
+  assert(!dashboardOtaSha256Valid("short", 5));
+  assert(dashboardOtaSizeValid(5088528, 0x4F0000));
+  assert(!dashboardOtaSizeValid(0, 0x4F0000));
+  assert(!dashboardOtaSizeValid(0x4F0001, 0x600000));
+  assert(dashboardOtaCanStart(true, true, false, false, false, false, false, 40, false));
+  assert(dashboardOtaCanStart(true, true, false, false, false, false, false, 5, true));
+  assert(!dashboardOtaCanStart(true, true, true, false, false, false, false, 100, true));
+  assert(!dashboardOtaCanStart(true, true, false, false, true, false, false, 100, true));
+  assert(!dashboardOtaCanStart(true, true, false, false, false, true, false, 100, true));
   assert(dashboardUsbPairingTokenValid("abcdefghijklmnopqrstuvwxyz_123456", 33));
   assert(!dashboardUsbPairingTokenValid("too-short", 9));
   assert(!dashboardUsbPairingTokenValid("abcdefghijklmnop|bad", 20));
@@ -28,6 +42,14 @@ int main() {
   assert(dashboardTypelessUsbAvailable(true, true, true, true));
   assert(!dashboardTypelessUsbAvailable(true, false, true, true));
   assert(!dashboardTypelessUsbAvailable(true, true, false, true));
+  assert(dashboardTypelessMode(true, true, true) ==
+         DashboardTypelessMode::usbMic);
+  assert(dashboardTypelessMode(false, true, true) ==
+         DashboardTypelessMode::macMic);
+  assert(dashboardTypelessMode(false, false, true) ==
+         DashboardTypelessMode::unavailable);
+  assert(dashboardTypelessMode(false, true, false) ==
+         DashboardTypelessMode::unavailable);
   assert(dashboardClockRefresh(8, 8, 60, 60) == DashboardClockRefresh::none);
   assert(dashboardClockRefresh(9, 8, 60, 60) ==
          DashboardClockRefresh::secondsOnly);
@@ -259,6 +281,14 @@ int main() {
          DashboardFeatureTouchTarget::hero);
   assert(dashboardFeatureTouchTarget(300, 140, false) ==
          DashboardFeatureTouchTarget::none);
+  assert(dashboardFeatureTouchTarget(120, 332, false) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardFeatureTouchTarget(120, 407, false) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardFeatureTapAccepted(DashboardGesture::none, 17, 17));
+  assert(dashboardFeatureTapAccepted(DashboardGesture::page, 31, -24));
+  assert(!dashboardFeatureTapAccepted(DashboardGesture::page, 33, 0));
+  assert(!dashboardFeatureTapAccepted(DashboardGesture::brightness, 4, 4));
   assert(!dashboardShakeDetected(false, 1.0f, 0.0f, 0.0f, 1000, 0, 900, 0.78f));
   assert(!dashboardShakeDetected(true, 1.0f, 0.0f, 0.0f, 850, 0, 900, 0.78f));
   assert(dashboardShakeDetected(true, 0.8f, 0.0f, 0.0f, 1000, 0, 900, 0.78f));
@@ -294,21 +324,34 @@ int main() {
       dashboardCompletionAnimationFrame(0);
   assert(completion.visible);
   assert(completion.ringDegrees == 0);
-  assert(completion.codexFrameIndex == 0);
-  assert(completion.claudeIconScalePercent == 141);
+  assert(completion.providerIconStep == 0);
   assert(completion.successRadius == 0);
   assert(completion.intensityPercent == 100);
 
   completion = dashboardCompletionAnimationFrame(500);
   assert(completion.visible);
   assert(completion.ringDegrees == 180);
-  assert(completion.codexFrameIndex == 1);
-  assert(completion.claudeIconScalePercent == 150);
+  assert(completion.providerIconStep == 0);
+  assert(completion.successRadius == 0);
+
+  completion = dashboardCompletionAnimationFrame(650);
+  assert(completion.providerIconStep == 1);
+  completion = dashboardCompletionAnimationFrame(700);
+  assert(completion.providerIconStep == 2);
+  completion = dashboardCompletionAnimationFrame(750);
+  assert(completion.providerIconStep == 3);
+  completion = dashboardCompletionAnimationFrame(800);
+  assert(completion.providerIconStep == 4);
+  completion = dashboardCompletionAnimationFrame(850);
+  assert(completion.providerIconStep == -1);
+  completion = dashboardCompletionAnimationFrame(999);
+  assert(completion.providerIconStep == -1);
   assert(completion.successRadius == 0);
 
   completion = dashboardCompletionAnimationFrame(1000);
   assert(completion.visible);
   assert(completion.ringDegrees == 360);
+  assert(completion.providerIconStep == -1);
   assert(completion.successRadius == 0);
 
   completion = dashboardCompletionAnimationFrame(1140);
@@ -322,10 +365,15 @@ int main() {
   assert(completion.successRadius == kDashboardCompletionFullRadius);
   assert(completion.intensityPercent == 100);
 
-  completion = dashboardCompletionAnimationFrame(1900);
+  completion = dashboardCompletionAnimationFrame(2199);
   assert(completion.visible);
   assert(completion.successRadius == kDashboardCompletionFullRadius);
-  assert(completion.intensityPercent == 33);
+  assert(completion.intensityPercent == 100);
+
+  completion = dashboardCompletionAnimationFrame(2400);
+  assert(completion.visible);
+  assert(completion.successRadius == kDashboardCompletionFullRadius);
+  assert(completion.intensityPercent == 50);
   assert(!dashboardCompletionAnimationFrame(kDashboardCompletionDurationMs).visible);
   return 0;
 }

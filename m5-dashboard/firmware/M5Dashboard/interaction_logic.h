@@ -47,6 +47,12 @@ enum class DashboardClockRefresh {
   fullPage,
 };
 
+enum class DashboardTypelessMode {
+  unavailable,
+  macMic,
+  usbMic,
+};
+
 constexpr int kEditorialHeaderX = 124;
 constexpr int kEditorialHeaderBoundsY = 48;
 constexpr int kEditorialHeaderBoundsWidth = 104;
@@ -91,10 +97,14 @@ constexpr int kFeatureSecondaryActionWidth = 62;
 constexpr int kFeatureActionHeight = 52;
 constexpr int kFeaturePrimaryTouchX = 96;
 constexpr int kFeatureSecondaryTouchX = 278;
-constexpr int kFeatureActionTouchY = 338;
+// The physical action row is close to the round lower edge. Expand upward and
+// use every safe pixel below it so a fingertip does not have to land on the
+// label itself.
+constexpr int kFeatureActionTouchY = 330;
 constexpr int kFeaturePrimaryTouchWidth = 182;
 constexpr int kFeatureSecondaryTouchWidth = 76;
-constexpr int kFeatureActionTouchHeight = 66;
+constexpr int kFeatureActionTouchHeight = 78;
+constexpr int kFeatureActionTapSlop = 32;
 constexpr int kFeatureHeroTouchX = 230;
 constexpr int kFeatureHeroTouchY = 96;
 constexpr int kFeatureHeroTouchWidth = 176;
@@ -271,6 +281,19 @@ inline DashboardFeatureTouchTarget dashboardFeatureTouchTarget(int x, int y,
   return DashboardFeatureTouchTarget::none;
 }
 
+inline bool dashboardFeatureTapAccepted(DashboardGesture gesture,
+                                        int deltaX, int deltaY) {
+  // The global 18 px gesture lock is intentionally crisp for page navigation,
+  // but a round-screen footer tap commonly drifts farther under a fingertip.
+  // A short horizontal drift is still far below the 100 px page-swipe gate.
+  bool tapLikeGesture = gesture == DashboardGesture::none ||
+                        gesture == DashboardGesture::page;
+  return tapLikeGesture && deltaX >= -kFeatureActionTapSlop &&
+         deltaX <= kFeatureActionTapSlop &&
+         deltaY >= -kFeatureActionTapSlop &&
+         deltaY <= kFeatureActionTapSlop;
+}
+
 inline bool dashboardShakeDetected(bool previousReady, float deltaX, float deltaY,
                                    float deltaZ, uint32_t now,
                                    uint32_t lastShakeAt, uint32_t cooldownMs,
@@ -363,6 +386,14 @@ inline bool dashboardTypelessUsbAvailable(bool audioReady,
                                            bool usbLinkUsable,
                                            bool usbBridgeOnline) {
   return audioReady && physicalUsbConnected && usbLinkUsable && usbBridgeOnline;
+}
+
+inline DashboardTypelessMode dashboardTypelessMode(bool usbAvailable,
+                                                    bool wifiConnected,
+                                                    bool wifiBridgeOnline) {
+  if (usbAvailable) return DashboardTypelessMode::usbMic;
+  if (wifiConnected && wifiBridgeOnline) return DashboardTypelessMode::macMic;
+  return DashboardTypelessMode::unavailable;
 }
 
 inline DashboardClockRefresh dashboardClockRefresh(int currentSecond,

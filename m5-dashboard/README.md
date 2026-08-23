@@ -7,7 +7,7 @@
 - Claude：显示活动、额度窗口和 Token 用量。
 - AI 热点尖叫：筛选官方 AI 新闻源，新热点到达时切页提示，并使用扬声器与振动马达提醒。
 - Obsidian 掷骰子：从明确授权的 Markdown 根目录随机抽一篇笔记并在 Obsidian 中打开。
-- 时钟总览：时间、日期、天气、电量、TickTick 专注进度，以及当天全部 Coding AI 的
+- 时钟总览：时间、日期、天气、电量、TickTick 今日累计专注分钟，以及当天全部 Coding AI 的
   Token 总处理量。
 
 公开示例默认不展示 Codex/Claude 任务标题和对话。实时对话预览必须由本人显式开启，
@@ -61,7 +61,10 @@ python3 scripts/check.py --token 'YOUR_DASHBOARD_TOKEN'
 看到 `TickTick: connected=True` 说明专注服务已经接通。离线时先确认 8787 服务正在运行，
 再检查 `ticktick.base_url` 和 `ticktick.token`。
 
-首屏 AI 用量默认读取 `http://127.0.0.1:8177/api/token-series?days=1&metric=total`。
+AI 用量默认读取 `http://127.0.0.1:8177/api/token-series?days=380&metric=total`：最后一天值用于
+首屏今日总量，各渠道的窗口总和可作为本地日志可回溯累计量；当前 Multi AI Usage Monitor
+最多扫描约 95 天本地 Claude 日志，因此 Claude 的“累计”是可回溯累计，不冒充账号创建
+以来的绝对终身总量。
 来源是 `api-usage-board` 已归一化的 Claude Code、Codex、Kimi Code、DeepSeek、OpenRouter
 和 Grok；Cursor 与 Antigravity 目前没有 Token 序列，因此不进入总量。首屏采用
 `today.total`，即 input + output + cache read + cache write 的总处理量，同时 Bridge 保留
@@ -69,6 +72,10 @@ python3 scripts/check.py --token 'YOUR_DASHBOARD_TOKEN'
 数据冒充完整总量；Grok 当天有数据时因其日志是近似口径，数值前显示 `~`。
 当前跨 Provider 没有共同 request id；若同一次请求同时被客户端本地日志和 OpenRouter
 analytics 记录，需要在 `api-usage-board` 侧排除重复渠道，手表端不会猜测去重。
+
+TickTick Focus Bridge 只提供当前正计时和倒计时状态，没有今日汇总字段。Dashboard Bridge
+因此按两个计时器的进度增量维护按日台账，并持久化到 `ticktick.daily_state_path`；首页显示
+`专25m` 这样的今日累计分钟，完成计时或 Bridge 重启后不会归零，跨本地午夜开始新一天。
 
 示例配置已包含 `ai_hotspot` 与 `obsidian`。AI 热点由三路数据汇聚：Codex Resets 的确认
 重置与预测、AIHOT 精选的 snapshot/changes 增量、OpenAI/Google 等官方 RSS，以及
@@ -112,7 +119,9 @@ python3 scripts/install.py --all
 StopWatch 插着 USB 时不会长期占用系统默认输入。只有从第 5 页开始 Typeless 听写时，
 Bridge 才会记住当前麦克风并临时切换到 `M5 StopWatch Mic`（兼容早期名称
 `TinyUSB UAC1`）；手表结束听写或启动失败后会恢复原输入设备。通过键盘或其他方式启动
-Typeless 时，仍使用 Mac 原本的默认麦克风。
+Typeless 时，仍使用 Mac 原本的默认麦克风。未插 USB 但 Wi-Fi Bridge 在线时，第 5 页会
+降级为 `MAC MIC` 遥控模式：只发送 Typeless 启停快捷键，不切换输入设备，直接使用电脑
+当前的默认麦克风。
 
 首次执行 `--launch-agent` 或 `--all` 时，安装器会为缺少有效 Token 的本机配置自动生成
 随机 Token，并以 `0600` 权限保存。连接 StopWatch 后，设备会通过物理 USB CDC 自动配对
@@ -133,6 +142,42 @@ pio run -e m5stack-stopwatch-uac
 
 真机首次刷入应遵循项目根目录 `PROJECT.md`：先确认串口与原厂硬件，再进入官方 Download
 Mode，只写应用分区，不执行 `erase_flash`。
+
+USB 烧录脚本同时把原厂 8 KiB `otadata` 恢复为空白状态并写入 `ota_0`，确保此前若由 OTA
+切到 `ota_1`，救援后也会重新选择刚写入的 `ota_0`。它不会擦除 NVS，已保存的 Wi-Fi、
+Dashboard Token 和设备设置仍会保留。
+
+## 5. HTTP OTA
+
+HTTP OTA 是 Bridge 辅助的后续升级通道，不替代 USB 首次烧录和救援。原厂 16 MB 分区表中
+`ota_0` 与 `ota_1` 各为 `0x4f0000` bytes；本项目使用实机审计得到的完整分区表构建，编译阶段
+也会拒绝超过单个 OTA 分区的固件。
+
+升级流程如下：
+
+1. 在 Mac 上构建并完成测试；不要直接把未经验证的临时产物发布给手表。
+2. 用发布脚本把固件复制成以 SHA-256 命名的不可变文件，并原子更新 Bridge 的
+   `current.json`：
+
+   ```bash
+   python3 scripts/publish_ota.py \
+     --firmware firmware/.pio/build/m5stack-stopwatch-uac/firmware.bin
+   ```
+
+3. Bridge 通过需要 Dashboard Token 的 `GET /api/ota/manifest` 提供大小、SHA-256 和下载路径，
+   再由 `GET /api/ota/firmware/<sha256>` 流式提供镜像。没有 `current.json` 时接口返回 `204`，
+   手表保持原版本。
+4. 手表只在第 1 屏、亮屏、Bridge 与 Wi-Fi 在线且没有计时、听写、完成动画或配网等交互时
+   启动升级；未接 USB 时还要求电量不少于 40%。下载期间屏幕显示进度。
+5. 镜像直接写入当前未运行的 OTA 分区，同时计算 SHA-256。只有实际字节数、SHA-256、响应
+   身份头和 ESP 应用镜像校验全部通过，才保存版本标记并切换启动分区；任何失败都会中止写入，
+   不改变当前启动分区，同一坏候选在本次运行中也不会反复尝试。
+6. 新固件完成完整 `setup()` 后才标记为有效。若启动阶段崩溃，ESP32 OTA 回滚机制可回到上一
+   可用分区；USB 烧录脚本始终是最终救援入口。
+
+这是一条可信家庭局域网内的轻量通道。Dashboard Token、精确大小和 SHA-256 能防止传输损坏
+与误写，但 HTTP 本身不提供 TLS 或固件签名级的发布者身份认证；不要把 Bridge 端口暴露到公网。
+需要更强供应链保证时，应再引入签名清单、Secure Boot 或 HTTPS，而不是把哈希误当成签名。
 
 ## 操作
 
@@ -161,12 +206,13 @@ Mode，只写应用分区，不执行 `erase_flash`。
 任意 A/B 专注操作都会自动切换到第二页提供反馈。
 
 原来绑定 B 键的 Typeless 麦克风入口已让位给倒计时；在第 5 页轻触中央麦克风区域，
-即可开始或停止 Typeless USB 收音。页面只有在物理 USB、TinyUSB 音频链路和 USB Bridge
-均在线时才显示 `READY`；未插线显示 `NO USB`，已插线但 Mac 尚未完成 Bridge 鉴权时
-显示两行 `NO / BRIDGE`。两组文案均使用补齐字符的原生 80 px Noto Bold 字体，不缩放、
-不回退到缺字字体。不可用状态不会向 Mac 发送 Typeless 启动动作，录音中拔线则会
-主动结束当前听写会话。M5 麦克风只在这段由手表发起的会话内临时成为系统默认输入；
-停止后会恢复开始前的输入设备，不影响其他语音产品和项目。
+即可开始或停止 Typeless。物理 USB、TinyUSB 音频和 USB Bridge 均在线时使用 `USB MIC`：
+StopWatch 提供真实 48 kHz 麦克风、波形和峰值；USB 不可用但已鉴权的 Wi-Fi Bridge 在线时
+使用 `MAC MIC`：仅遥控 Typeless，保留 Mac 当前默认输入，不伪造手表波形。两种模式都在
+原生 24 px 标题网格显示来源，中央继续使用同一套原生 80 px `READY / LIVE / ERROR`，
+没有运行时缩放或混排基线。两条链路都不可用时才显示两行 `NO / BRIDGE`，且不会发送动作。
+USB 会话中拔线会主动结束当前听写；M5 麦克风只在这段会话内临时成为系统默认输入，停止后
+恢复开始前的设备，不影响其他语音产品和项目。
 
 ## 页面
 
@@ -174,12 +220,13 @@ Mode，只写应用分区，不执行 `erase_flash`。
   并靠近 `HH:MM` 组成一个整体；每秒只刷新秒数小区域，分钟变化时才完整重绘，避免整页闪动。
   薄荷绿强调底上的电池始终使用高对比深色，USB 充电状态只显示闪电切口，不会变成与底色
   混在一起的绿色。紧凑状态条显示 TickTick 当前专注进度
-  与当天全部 Coding AI 的 Token 总处理量，例如 `专35 · AI518M`；Codex/Claude 额度分别
+  与当天全部 Coding AI 的 Token 总处理量，例如 `专25m · AI 5.03亿`；Codex/Claude 额度分别
   留在第 3、4 页。
 - 第 2 页：TickTick 双计时卡片。左侧 A 为正计时，右侧 B 为 25 分钟倒计时。
 - 第 3 页：Codex 仪表盘与动态中心图标。
 - 第 4 页：Claude 仪表盘与动态中心图标。
-- 第 5 页：Typeless USB 麦克风、实时波形、峰值表；轻触中央开始/停止。
+- 第 5 页：Typeless 双模式；USB 时使用手表麦克风并显示真实波形，拔线时经 Wi-Fi 遥控
+  Typeless 使用 Mac 麦克风；轻触中央开始/停止。
 - 第 6 页：AI 热点尖叫。新文章自动成为当前热点；声音和振动提醒后可确认或打开。
 - 第 7 页：Obsidian 幸运笔记。显示可抽数量、标题和来源文件夹，支持触摸或晃动再摇。
 
@@ -218,7 +265,9 @@ Python 和独立 C++ 测试可以在无设备时完成；PlatformIO 完整编译
 
 - TickTick 控制仍依赖 macOS 本机 UI 自动化，系统权限、窗口状态或 TickTick 更新都可能
   影响动作成功率；旧 Stick S3 项目的回退和错误状态会原样上报。
-- M5 到 Mac 的接口只适合可信局域网或物理 USB。
+- M5 到 Mac 的接口（包括 HTTP OTA）只适合可信局域网或物理 USB。
+- `MAC MIC` 依赖手表和 Mac 位于可互访的同一 Wi-Fi，且 Mac Bridge 正在运行；该模式不会
+  将 Mac 麦克风峰值回传给手表，因此页面明确显示输入来源而不伪造音量波形。
 - B 键已经专用于倒计时，Typeless 改用第 5 页触摸开关。
 - 熄屏时 AI 新闻轮询继续依赖 Bridge 和可用的 USB/Wi-Fi 链路；新尖叫会播放声音并震动，
   但不会擅自点亮 AMOLED。用户下一次短按唤醒时才自动进入第 6 页。

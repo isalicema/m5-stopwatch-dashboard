@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -75,6 +76,45 @@ class TypelessControllerTests(unittest.TestCase):
                 run.call_args_list[-1].args[0],
                 [str(controller.audio_helper), "restore", "42"],
             )
+
+    def test_system_mode_uses_the_existing_mac_microphone_without_capture_or_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = self.controller(directory)
+            with mock.patch.object(controller, "_is_running", return_value=True), mock.patch(
+                "bridge.typeless_client.subprocess.run", side_effect=self.successful_run
+            ) as run:
+                self.assertTrue(controller.perform("start", "system")["active"])
+                self.assertFalse(controller.perform("stop")["active"])
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(
+                commands,
+                [
+                    [str(controller.helper), "ctrl-cmd-shift-space"],
+                    [str(controller.helper), "ctrl-cmd-shift-space"],
+                ],
+            )
+            self.assertFalse(any(controller.audio_helper in map(Path, command) for command in commands))
+
+    def test_request_acknowledges_immediately_and_serializes_start_then_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = self.controller(directory)
+            completed = threading.Event()
+            actions = []
+
+            def perform(action, audio_mode="m5"):
+                actions.append((action, audio_mode))
+                if action == "stop":
+                    completed.set()
+                return {"connected": True, "active": action == "start"}
+
+            with mock.patch.object(controller, "perform", side_effect=perform):
+                started = controller.request("start", "system")
+                stopped = controller.request("stop", "system")
+                self.assertTrue(completed.wait(1))
+
+            self.assertEqual(started, {"active": True, "pending": True})
+            self.assertEqual(stopped, {"active": False, "pending": True})
+            self.assertEqual(actions, [("start", "system"), ("stop", "system")])
 
     def test_installed_app_helper_reports_its_own_exit_status(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,6 +203,8 @@ class TypelessControllerTests(unittest.TestCase):
             controller = self.controller(directory)
             with self.assertRaisesRegex(ValueError, "unsupported Typeless action"):
                 controller.perform("erase")
+            with self.assertRaisesRegex(ValueError, "unsupported Typeless audio mode"):
+                controller.perform("start", "bluetooth")
 
 
 if __name__ == "__main__":

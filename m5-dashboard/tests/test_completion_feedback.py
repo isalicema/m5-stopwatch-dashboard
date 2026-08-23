@@ -33,12 +33,40 @@ class CompletionFeedbackTests(unittest.TestCase):
         self.assertIn("claudeProvider ? 217 : 95", overlay)
         self.assertIn("editorialFrameAccentActive = false", overlay)
         self.assertIn("editorialFrameBurstActive = false", overlay)
+        self.assertIn(
+            "drawCompletionProviderIcon(claudeProvider, frame.providerIconStep)",
+            overlay,
+        )
+        self.assertIn("drawCompletionCheck(frame.successRadius, checkColor)", overlay)
         self.assertNotIn("drawString", overlay)
+        self.assertNotIn("drawPng", overlay)
+        self.assertNotIn("claude_mark_png", overlay)
+        self.assertNotIn("codex_pet_done_frames", overlay)
+        self.assertNotIn("completionIconCenterY", overlay)
         self.assertNotIn("showToast", overlay)
         self.assertNotIn("highlight", overlay)
 
+    def test_provider_icon_exits_before_success_check_begins(self):
+        contract = (
+            PROJECT / "firmware/M5Dashboard/icon_animation.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("else if (elapsedMs < 850)", contract)
+        self.assertIn("frame.providerIconStep = 4", contract)
+        self.assertIn("if (elapsedMs >= 1000 && elapsedMs < 1140)", contract)
+        self.assertNotIn("providerIconStep = 5", contract)
+
+    def test_full_screen_check_has_a_visible_hold_before_fading(self):
+        contract = (
+            PROJECT / "firmware/M5Dashboard/icon_animation.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kDashboardCompletionFullHoldUntilMs = 2200", contract)
+        self.assertIn("kDashboardCompletionDurationMs = 2600", contract)
+        self.assertIn(
+            "elapsedMs >= kDashboardCompletionFullHoldUntilMs", contract
+        )
+
     def test_ai_completion_physical_frame_never_falls_back_to_paper(self):
-        start = self.source.index("uint16_t currentRenderedBackground()")
+        start = self.source.index("uint16_t currentRenderedBackground(uint32_t now)")
         end = self.source.index("\n}\n", start) + 3
         background = self.source[start:end]
 
@@ -48,6 +76,25 @@ class CompletionFeedbackTests(unittest.TestCase):
             background,
         )
         self.assertIn("return rgb(backgroundR, backgroundG, backgroundB);", background)
+
+    def test_ai_completion_uses_one_clock_and_background_for_the_whole_frame(self):
+        start = self.source.index("void drawCurrentPage() {")
+        end = self.source.index("\n}\n", start) + 3
+        draw = self.source[start:end]
+
+        self.assertIn("uint32_t now = millis();", draw)
+        self.assertIn("uint16_t background = currentRenderedBackground(now);", draw)
+        self.assertIn("renderCurrentPage(now, background);", draw)
+        self.assertIn("pushRenderedFrame(background);", draw)
+        self.assertEqual(draw.count("uint32_t now = millis();"), 1)
+
+    def test_clock_patch_waits_for_completion_state_machine_to_exit(self):
+        self.assertIn("!completionAnimationRunning) {", self.source)
+        self.assertIn(
+            "overlayMode == OverlayMode::none && !completionAnimationRunning;",
+            self.source,
+        )
+        self.assertNotIn("!completionAnimationActive(millis())", self.source)
 
     def test_non_completion_haptics_are_preserved(self):
         self.assertIn("startVibration(190, 300)", self.source)

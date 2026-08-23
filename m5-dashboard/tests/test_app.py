@@ -1,6 +1,6 @@
 import unittest
 
-from bridge.app import dispatch_dashboard_action, dispatch_ticktick_action
+from bridge.app import build_handler, dispatch_dashboard_action, dispatch_ticktick_action
 
 
 class DashboardHttpTests(unittest.TestCase):
@@ -8,12 +8,13 @@ class DashboardHttpTests(unittest.TestCase):
         self.actions = []
         self.action = lambda value: self.actions.append(value) or {"connected": True}
 
-    def test_authenticated_ticktick_action_returns_dashboard_state(self):
+    def test_authenticated_ticktick_action_returns_compact_callback_result(self):
         status, body = dispatch_ticktick_action(
             "/api/ticktick/countdown-click", "secret", "secret", self.action
         )
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
+        self.assertTrue(body["connected"])
         self.assertEqual(self.actions, ["countdown-click"])
 
     def test_action_rejects_wrong_token(self):
@@ -37,6 +38,7 @@ class DashboardHttpTests(unittest.TestCase):
             "ai-ack": lambda: actions.append("ai-ack") or {"active": False},
             "obsidian-roll": lambda: actions.append("obsidian-roll") or {"selected": {}},
             "typeless-start": lambda: actions.append("typeless-start") or {"active": True},
+            "typeless-start-mac": lambda: actions.append("typeless-start-mac") or {"active": True},
         }
         status, body = dispatch_dashboard_action(
             "/api/ai/ack", "secret", "secret", callbacks
@@ -51,7 +53,16 @@ class DashboardHttpTests(unittest.TestCase):
             "/api/typeless/start", "secret", "secret", callbacks
         )
         self.assertEqual(status, 200)
-        self.assertEqual(actions, ["ai-ack", "obsidian-roll", "typeless-start"])
+        status, body = dispatch_dashboard_action(
+            "/api/typeless/start-mac", "secret", "secret", callbacks
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["active"])
+        self.assertEqual(
+            actions,
+            ["ai-ack", "obsidian-roll", "typeless-start", "typeless-start-mac"],
+        )
 
     def test_extra_action_rejects_wrong_token(self):
         status, body = dispatch_dashboard_action(
@@ -59,6 +70,29 @@ class DashboardHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 401)
         self.assertFalse(body["ok"])
+
+    def test_post_returns_compact_ack_without_serializing_dashboard_state(self):
+        class StateMustNotBeRead:
+            def snapshot(self):
+                raise AssertionError("POST must not serialize the full dashboard state")
+
+        handler = build_handler(
+            StateMustNotBeRead(),
+            "secret",
+            action_callbacks={
+                "typeless-start-mac": lambda: {"active": True, "pending": True}
+            },
+        )
+        request = handler.__new__(handler)
+        request.path = "/api/typeless/start-mac"
+        request.headers = {"X-Dashboard-Token": "secret"}
+        response = {}
+        request._json = lambda status, body: response.update(status=status, body=body)
+        request.do_POST()
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(
+            response["body"], {"ok": True, "active": True, "pending": True}
+        )
 
 
 if __name__ == "__main__":

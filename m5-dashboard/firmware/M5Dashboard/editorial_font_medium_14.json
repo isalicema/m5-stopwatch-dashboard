@@ -3,13 +3,45 @@
   "font_marker": "M5DASH_FONT_EDITORIAL_MEDIUM_14_V1",
   "identity_verified": true,
   "pixel_size": 14,
-  "glyph_count": 230,
+  "glyph_count": 235,
   "first_codepoint": 32,
   "last_codepoint": 40614,
-  "vlw_size": 44035,
-  "vlw_sha256": "c4dc5338facddb02e15c76546029e701955bbfb18fbff089bd3e5546b3d21556",
+  "vlw_size": 45127,
+  "vlw_sha256": "ed5608e1c2b808d4ce1215889083c71f7cea9df03b580d68590dd73eed21040c",
   "source_file": "NotoSansCJKsc-Medium.otf",
   "source_sha256": "25033438cfa41f1873d4902b8555956557b765117756bcef96406e023e49578c",
   "required_probe_glyphs": "",
-  "embedded_storage": "direct_flash_vlw"
+  "embedded_storage": "direct_flash_vlw",
+  "supplemental_glyphs": {
+    "亿": {
+      "source_file": "NotoSansCJK-Medium-5.otf",
+      "source_sha256": "ecc27c09875de097570c6c3a88d6a359e4193b9c2acf2087a48b4ddee87bb9b7",
+      "font_name": "Noto Sans CJK Medium",
+      "pixel_size": 14
+    },
+    "入": {
+      "source_file": "NotoSansSC-Medium.ttf",
+      "source_sha256": "09f17deea660cdd9cc2ba1e8b90adad18eabeca73b62b3c5f76b7ec3b61b33e0",
+      "font_name": "Noto Sans SC Medium",
+      "pixel_size": 14
+    },
+    "来": {
+      "source_file": "NotoSansSC-Medium.ttf",
+      "source_sha256": "09f17deea660cdd9cc2ba1e8b90adad18eabeca73b62b3c5f76b7ec3b61b33e0",
+      "font_name": "Noto Sans SC Medium",
+      "pixel_size": 14
+    },
+    "源": {
+      "source_file": "NotoSansSC-Medium.ttf",
+      "source_sha256": "09f17deea660cdd9cc2ba1e8b90adad18eabeca73b62b3c5f76b7ec3b61b33e0",
+      "font_name": "Noto Sans SC Medium",
+      "pixel_size": 14
+    },
+    "输": {
+      "source_file": "NotoSansSC-Medium.ttf",
+      "source_sha256": "09f17deea660cdd9cc2ba1e8b90adad18eabeca73b62b3c5f76b7ec3b61b33e0",
+      "font_name": "Noto Sans SC Medium",
+      "pixel_size": 14
+    }
+  }
 }

@@ -17,8 +17,9 @@ class TypelessPageTests(unittest.TestCase):
 
     def test_typeless_is_the_fifth_page(self):
         self.assertIn("constexpr int pageCount = 7;", self.source)
-        self.assertIn('drawEditorialHeader("Typeless", title, ink);', self.source)
-        self.assertIn('!usbAvailable ? "NO USB"', self.source)
+        self.assertIn('drawEditorialHeader("Typeless", modeLabel, ink);', self.source)
+        self.assertIn(': macMode ? "MAC MIC"', self.source)
+        self.assertIn('usbMode ? "USB MIC"', self.source)
         self.assertIn("currentPage == 4", self.source)
         self.assertIn("dashboardVoiceTouchTarget(designX, designY)", self.source)
         self.assertIn("toggleVoiceSession();", self.source)
@@ -32,37 +33,82 @@ class TypelessPageTests(unittest.TestCase):
         self.assertNotIn("drawEditorialHero(", overlay)
 
     def test_typeless_uses_touch_instead_of_the_b_button(self):
-        self.assertIn('"轻触中央开启麦克风"', self.source)
+        self.assertIn('"轻触使用手表麦克风"', self.source)
+        self.assertIn('"轻触使用电脑麦克风"', self.source)
         self.assertIn('performTickTickAction("countdown-click")', self.source)
         self.assertNotIn("voiceButtonTracking", self.source)
 
     def test_typeless_touch_controls_both_usb_audio_and_the_mac_app(self):
-        self.assertIn('performTypelessAction("start")', self.source)
-        self.assertIn('performTypelessAction("stop")', self.source)
+        self.assertIn('performTypelessAction("start", mode)', self.source)
+        self.assertIn('performTypelessAction("stop", endedMode)', self.source)
         self.assertIn('"typeless-start"', self.source)
         self.assertIn('"/api/typeless/start"', self.source)
+        self.assertIn('"/api/typeless/start-mac"', self.source)
 
-    def test_typeless_requires_physical_usb_and_a_live_usb_bridge(self):
+    def test_mac_mic_waits_for_the_bridge_readiness_window(self):
+        self.assertIn("kTypelessHttpActionTimeoutMs = 8000", self.source)
+        self.assertIn(
+            'action == "start" ? "/api/typeless/start-mac" : "/api/typeless/stop",\n'
+            "        kTypelessHttpActionTimeoutMs",
+            self.source,
+        )
+
+    def test_mac_mic_has_distinct_success_failure_and_stop_haptics(self):
+        self.assertIn("startVibration(55, 28);", self.source)
+        self.assertIn("startVibration(120, 90);", self.source)
+        self.assertIn("startVibration(185, 160);", self.source)
+        self.assertIn("startVibration(105, 70);", self.source)
+
+    def test_mac_mic_keeps_stop_control_when_acknowledgement_is_lost(self):
+        self.assertIn("voiceSessionActive = true;", self.source)
+        self.assertIn('bool acknowledged = performTypelessAction("start", mode);', self.source)
+        self.assertNotIn(
+            "voiceSessionMode = DashboardTypelessMode::unavailable;\n"
+            "        voiceCaptureFailed = true;",
+            self.source,
+        )
+
+    def test_stop_acknowledges_locally_before_remote_cleanup(self):
+        state_clear = self.source.index("voiceSessionActive = false;", self.source.index("void endVoiceCapture()"))
+        redraw = self.source.index("drawCurrentPage();", state_clear)
+        remote_stop = self.source.index('performTypelessAction("stop", endedMode);', redraw)
+        self.assertLess(state_clear, redraw)
+        self.assertLess(redraw, remote_stop)
+
+    def test_typeless_prefers_usb_mic_then_falls_back_to_mac_mic_over_wifi(self):
         self.assertIn("bool typelessUsbAvailable()", self.source)
         self.assertIn("usbAudioReady, deviceUsbConnected", self.source)
         self.assertIn("usbLinkUsable.load(std::memory_order_acquire), usbBridgeOnline", self.source)
-        self.assertIn('!deviceUsbConnected ? "NO USB"', self.source)
-        self.assertIn('!usbAvailable     ? "NO BRIDGE"', self.source)
+        self.assertIn("DashboardTypelessMode availableTypelessMode()", self.source)
+        self.assertIn("WiFi.status() == WL_CONNECTED", self.source)
+        self.assertIn('usbMode ? "USB MIC"', self.source)
+        self.assertIn(': macMode ? "MAC MIC"', self.source)
         self.assertIn('canvas.drawString("NO", 18, 170);', self.source)
         self.assertIn('canvas.drawString("BRIDGE", 18, 235);', self.source)
-        self.assertIn('!usbAvailable ? "NO USB"', self.source)
-        self.assertIn('if (!typelessUsbAvailable()) {', self.source)
-        self.assertIn("if (voiceSessionActive && !usbAvailable)", self.source)
+        self.assertIn('mode == DashboardTypelessMode::unavailable', self.source)
+        self.assertIn('mode == DashboardTypelessMode::usbMic', self.source)
+        self.assertIn('voiceSessionMode == DashboardTypelessMode::usbMic', self.source)
 
     def test_typeless_unavailable_copy_uses_native_unscaled_font(self):
         start = self.source.index("void drawVoiceOverlay()")
         end = self.source.index("\n}\n", start)
         overlay = self.source[start:end]
         self.assertIn("useEditorialHero80()", overlay)
-        self.assertIn('!usbAvailable ? "NO USB"', overlay)
         self.assertIn('canvas.drawString("NO", 18, 170);', overlay)
         self.assertIn('canvas.drawString("BRIDGE", 18, 235);', overlay)
         self.assertNotIn("setTextSize(0.", overlay)
+
+    def test_usb_and_mac_mode_labels_share_one_native_typographic_grid(self):
+        start = self.source.index("void drawVoiceOverlay()")
+        end = self.source.index("\n}\n", start)
+        overlay = self.source[start:end]
+        self.assertIn('usbMode ? "USB MIC"', overlay)
+        self.assertIn(': macMode ? "MAC MIC"', overlay)
+        self.assertIn('drawEditorialHeader("Typeless", modeLabel, ink);', overlay)
+        self.assertIn('voiceSessionActive ? "LIVE" : "READY"', overlay)
+        self.assertIn('"BUILT-IN · WI-FI"', overlay)
+        self.assertIn('usbMode ? "轻触使用手表麦克风"', overlay)
+        self.assertIn(': "轻触使用电脑麦克风"', overlay)
 
     def test_typeless_footer_capsule_is_also_a_touch_target(self):
         self.assertIn("const bool inCentralTarget", self.interaction_source)

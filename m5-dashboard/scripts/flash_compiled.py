@@ -11,14 +11,19 @@ import shutil
 import subprocess
 import sys
 import termios
+import tempfile
 import time
 from pathlib import Path
 from typing import List, Tuple
 
 
 REQUIRED_UI_FONT_MARKER = b"M5DASH_FONT_NOTO_SANS_CJK_SC_16_V1"
-# The factory C152 partition table uses ota_0 at 0x20000 with 0x4f0000 bytes.
-# This script intentionally preserves that bootloader/partition/NVS layout.
+# The factory C152 partition table keeps the OTA selector in a dedicated 8 KiB
+# partition and uses ota_0 at 0x20000 with 0x4f0000 bytes.  A rescue flash must
+# reset only that selector as well as writing ota_0: otherwise a watch that was
+# previously booted from ota_1 can ignore the freshly rescued ota_0 image.
+OTA_DATA_OFFSET = 0xD000
+OTA_DATA_SIZE = 0x2000
 APP_FLASH_OFFSET = 0x20000
 APP_PARTITION_SIZE = 0x4F0000
 DASHBOARD_SERVICE_LABELS = (
@@ -42,6 +47,16 @@ def require_factory_app_partition_fit(firmware: Path) -> None:
             "拒绝烧录：应用固件大于 StopWatch 原厂 ota_0 分区 "
             f"({firmware.stat().st_size} > {APP_PARTITION_SIZE} bytes)"
         )
+
+
+def rescue_flash_segments(firmware: Path, blank_otadata: Path) -> List[str]:
+    """Return the two factory-table segments used by a recoverable USB flash."""
+    return [
+        hex(OTA_DATA_OFFSET),
+        str(blank_otadata),
+        hex(APP_FLASH_OFFSET),
+        str(firmware),
+    ]
 
 
 def serial_ports() -> List[str]:
@@ -170,36 +185,40 @@ def main() -> None:
 
     paused_services = pause_dashboard_services()
     try:
-        port, before_mode = bootloader_port(port)
-        command = esptool_command(project) + [
-            "--chip",
-            "esp32s3",
-            "--port",
-            port,
-            "--baud",
-            # The direct-flash Noto image is larger than the previous build.
-            # Prefer the board's proven-stable native USB rate over speed.
-            "115200",
-            "--before",
-            before_mode,
-            "--after",
-            # The 1200-bps handoff uses the ESP32-S3 native USB ROM port.
-            # A watchdog reset reliably leaves ROM download mode and returns
-            # to the composite dashboard device; RTS can leave this board in ROM.
-            "watchdog_reset",
-            "write_flash",
-            "-z",
-            "--flash_mode",
-            "qio",
-            "--flash_freq",
-            "80m",
-            "--flash_size",
-            "16MB",
-            hex(APP_FLASH_OFFSET),
-            str(firmware),
-        ]
-        print("正在烧录 %s；只更新应用分区，家庭 Wi-Fi 和现有令牌会保留。" % port)
-        subprocess.run(command, check=True)
+        with tempfile.TemporaryDirectory(prefix="m5-rescue-") as temporary:
+            blank_otadata = Path(temporary) / "blank-otadata.bin"
+            blank_otadata.write_bytes(b"\xff" * OTA_DATA_SIZE)
+            port, before_mode = bootloader_port(port)
+            command = esptool_command(project) + [
+                "--chip",
+                "esp32s3",
+                "--port",
+                port,
+                "--baud",
+                # The direct-flash Noto image is larger than the previous build.
+                # Prefer the board's proven-stable native USB rate over speed.
+                "115200",
+                "--before",
+                before_mode,
+                "--after",
+                # The 1200-bps handoff uses the ESP32-S3 native USB ROM port.
+                # A watchdog reset reliably leaves ROM download mode and returns
+                # to the composite dashboard device; RTS can leave this board in ROM.
+                "watchdog_reset",
+                "write_flash",
+                "-z",
+                "--flash_mode",
+                "qio",
+                "--flash_freq",
+                "80m",
+                "--flash_size",
+                "16MB",
+            ] + rescue_flash_segments(firmware, blank_otadata)
+            print(
+                "正在烧录 %s；恢复 ota_0 启动选择，家庭 Wi-Fi、令牌和设备设置会保留。"
+                % port
+            )
+            subprocess.run(command, check=True)
     finally:
         resume_dashboard_services(paused_services)
     print("烧录完成。")

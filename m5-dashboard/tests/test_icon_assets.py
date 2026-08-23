@@ -68,11 +68,25 @@ class IconAssetTests(unittest.TestCase):
                 re.DOTALL,
             )
         }
+        completion_sizes = (96, 80, 64, 48, 32)
+        completion_names = {
+            f"{provider}_completion_icon_{size}_rgb565"
+            for provider in ("codex", "claude")
+            for size in completion_sizes
+        }
         self.assertEqual(
             set(assets),
-            {"codex_brand_icon_rgb565", "claude_brand_icon_rgb565"},
+            {"codex_brand_icon_rgb565", "claude_brand_icon_rgb565"}
+            | completion_names,
         )
-        self.assertTrue(all(len(pixels) == 96 * 96 for pixels in assets.values()))
+        self.assertEqual(len(assets["codex_brand_icon_rgb565"]), 96 * 96)
+        self.assertEqual(len(assets["claude_brand_icon_rgb565"]), 96 * 96)
+        for provider in ("codex", "claude"):
+            for size in completion_sizes:
+                self.assertEqual(
+                    len(assets[f"{provider}_completion_icon_{size}_rgb565"]),
+                    size * size,
+                )
         self.assertIn("codex_brand_icon_rgb565_pixels = 9216", source)
         self.assertIn("claude_brand_icon_rgb565_pixels = 9216", source)
 
@@ -99,6 +113,31 @@ class IconAssetTests(unittest.TestCase):
             ]
             actual_pixels = [int(value, 16) for value in assets[array_name]]
             self.assertEqual(actual_pixels, expected_pixels, filename)
+
+        for provider, filename, background in (
+            ("codex", "codex-brand-icon-96.png", (7, 8, 17)),
+            ("claude", "claude-brand-icon-96.png", (15, 11, 9)),
+        ):
+            with Image.open(FEATURE_ASSET_DIR / filename) as image:
+                foreground = image.convert("RGBA")
+            for size in completion_sizes:
+                resized = foreground.resize((size, size), Image.Resampling.LANCZOS)
+                base = Image.new("RGBA", (size, size), (*background, 255))
+                flattened = Image.alpha_composite(base, resized).convert("RGB")
+                rgb_pixels = (
+                    flattened.get_flattened_data()
+                    if hasattr(flattened, "get_flattened_data")
+                    else flattened.getdata()
+                )
+                expected_pixels = [
+                    ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3)
+                    for red, green, blue in rgb_pixels
+                ]
+                actual_pixels = [
+                    int(value, 16)
+                    for value in assets[f"{provider}_completion_icon_{size}_rgb565"]
+                ]
+                self.assertEqual(actual_pixels, expected_pixels, f"{provider}-{size}")
 
     def test_provider_percent_is_a_tight_antialiased_rgba_glyph(self):
         embedded = embedded_pngs(BRAND_HEADER)

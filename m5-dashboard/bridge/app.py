@@ -17,6 +17,7 @@ from .claude_client import ClaudeMonitor
 from .codex_client import CodexMonitor
 from .discovery import DiscoveryResponder
 from .obsidian_dice import ObsidianDice
+from .ota import FirmwareCatalog
 from .peer_state import PeerStateMonitor, resolve_peer_auth
 from .state import DashboardState
 from .ticktick_client import ACTIONS, TickTickMonitor
@@ -31,6 +32,7 @@ EXTRA_ACTION_ROUTES = {
     "/api/obsidian/roll": "obsidian-roll",
     "/api/obsidian/open": "obsidian-open",
     "/api/typeless/start": "typeless-start",
+    "/api/typeless/start-mac": "typeless-start-mac",
     "/api/typeless/stop": "typeless-stop",
 }
 
@@ -57,8 +59,11 @@ def dispatch_ticktick_action(
     if action not in ACTIONS or action_callback is None:
         return HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"}
     try:
-        action_callback(action)
-        return HTTPStatus.OK, {"ok": True}
+        result = action_callback(action)
+        body = {"ok": True}
+        if isinstance(result, dict):
+            body.update(result)
+        return HTTPStatus.OK, body
     except (OSError, ValueError) as exc:
         return HTTPStatus.BAD_GATEWAY, {"ok": False, "error": str(exc)}
 
@@ -76,8 +81,11 @@ def dispatch_dashboard_action(
     if callback is None:
         return HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"}
     try:
-        callback()
-        return HTTPStatus.OK, {"ok": True}
+        result = callback()
+        body = {"ok": True}
+        if isinstance(result, dict):
+            body.update(result)
+        return HTTPStatus.OK, body
     except (OSError, ValueError) as exc:
         return HTTPStatus.BAD_GATEWAY, {"ok": False, "error": str(exc)}
 
@@ -87,6 +95,7 @@ def build_handler(
     api_token: str,
     ticktick_action: Optional[Callable[[str], Dict[str, Any]]] = None,
     action_callbacks: Optional[Dict[str, Callable[[], Dict[str, Any]]]] = None,
+    ota_catalog: Optional[FirmwareCatalog] = None,
 ) -> type[BaseHTTPRequestHandler]:
     seen_clients: set[str] = set()
     extra_actions = dict(action_callbacks or {})
@@ -104,14 +113,63 @@ def build_handler(
             self.wfile.write(raw)
 
         def do_GET(self) -> None:  # noqa: N802
-            path = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            path = parsed.path
             if path == "/healthz":
                 self._json(HTTPStatus.OK, {"ok": True})
+                return
+            supplied = self.headers.get("X-Dashboard-Token", "")
+            if path == "/api/ota/manifest":
+                if not hmac.compare_digest(supplied, api_token):
+                    self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
+                    return
+                release = ota_catalog.current() if ota_catalog is not None else None
+                if release is None:
+                    self.send_response(HTTPStatus.NO_CONTENT)
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                print(
+                    "OTA manifest offered sha256=%s bytes=%d"
+                    % (release.sha256, release.size),
+                    flush=True,
+                )
+                self._json(HTTPStatus.OK, release.manifest())
+                return
+            if path.startswith("/api/ota/firmware/"):
+                if not hmac.compare_digest(supplied, api_token):
+                    self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
+                    return
+                sha256 = path.removeprefix("/api/ota/firmware/")
+                release = ota_catalog.resolve(sha256) if ota_catalog is not None else None
+                if release is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
+                    return
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(release.size))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("ETag", '"%s"' % release.sha256)
+                self.send_header("X-Firmware-SHA256", release.sha256)
+                self.send_header("X-Firmware-Release", release.release_id)
+                self.end_headers()
+                delivered = False
+                try:
+                    with release.path.open("rb") as firmware:
+                        for chunk in iter(lambda: firmware.read(64 * 1024), b""):
+                            self.wfile.write(chunk)
+                    delivered = True
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                print(
+                    "OTA firmware %s sha256=%s"
+                    % ("delivered" if delivered else "interrupted", release.sha256),
+                    flush=True,
+                )
                 return
             if path != "/api/state":
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
                 return
-            supplied = self.headers.get("X-Dashboard-Token", "")
             if not hmac.compare_digest(supplied, api_token):
                 self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "unauthorized"})
                 return
@@ -134,10 +192,12 @@ def build_handler(
                     api_token,
                     extra_actions,
                 )
-            if status == HTTPStatus.OK:
-                self._json(HTTPStatus.OK, state.snapshot())
-            else:
-                self._json(status, body)
+            # Mutating actions return a compact acknowledgement. Sending the
+            # complete dashboard snapshot here made a successful Typeless
+            # shortcut look like a timeout once transcripts and hotspot data
+            # grew large. The regular GET /api/state poll remains the single
+            # source for full dashboard state.
+            self._json(status, body)
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -158,6 +218,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     ai_hotspot_config = config.get("ai_hotspot") or {}
     obsidian_config = config.get("obsidian") or {}
     typeless_config = config.get("typeless") or {}
+    ota_config = config.get("ota") or {}
     server_config = config["server"]
     configured_peers = config.get("peers") if isinstance(config.get("peers"), list) else []
     peer_sources = resolve_peer_auth(
@@ -204,8 +265,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         action_callbacks["obsidian-open"] = monitor.open_selected
     if typeless_config.get("enabled", True):
         typeless = TypelessController(typeless_config)
-        action_callbacks["typeless-start"] = lambda: typeless.perform("start")
-        action_callbacks["typeless-stop"] = lambda: typeless.perform("stop")
+        action_callbacks["typeless-start"] = lambda: typeless.request("start", "m5")
+        action_callbacks["typeless-start-mac"] = lambda: typeless.request("start", "system")
+        action_callbacks["typeless-stop"] = lambda: typeless.request("stop")
     if peer_sources:
         monitor = PeerStateMonitor(
             peer_sources,
@@ -223,6 +285,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             str(server_config["api_token"]),
             ticktick_monitor.perform if ticktick_monitor is not None else None,
             action_callbacks,
+            FirmwareCatalog(ota_config),
         ),
     )
     if server_config.get("discovery_enabled", True):

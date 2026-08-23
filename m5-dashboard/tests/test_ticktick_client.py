@@ -1,9 +1,11 @@
 import json
+import tempfile
 import unittest
 from io import BytesIO
+from pathlib import Path
 from unittest import mock
 
-from bridge.ticktick_client import TickTickMonitor
+from bridge.ticktick_client import DailyFocusLedger, TickTickMonitor
 
 
 def response(value):
@@ -31,6 +33,7 @@ class TickTickMonitorTests(unittest.TestCase):
         self.assertTrue(value["connected"])
         self.assertEqual(value["stopwatch"]["elapsed_seconds"], 81)
         self.assertEqual(value["countdown"]["remaining_seconds"], 900)
+        self.assertEqual(value["today_focus_seconds"], 681)
 
     def test_starting_countdown_pauses_running_stopwatch_first(self):
         self.monitor.refresh = mock.Mock(
@@ -61,6 +64,58 @@ class TickTickMonitorTests(unittest.TestCase):
         self.assertEqual(
             self.monitor._request.call_args_list,
             [mock.call("/pomo/pause", {}), mock.call("/focus/click", {})],
+        )
+
+
+class DailyFocusLedgerTests(unittest.TestCase):
+    def test_seeds_visible_sessions_then_accumulates_new_progress_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "daily.json"
+            ledger = DailyFocusLedger(str(path))
+            stopwatch = {"state": "idle", "elapsed_seconds": 39}
+            countdown = {
+                "state": "done",
+                "duration_seconds": 1500,
+                "remaining_seconds": 0,
+            }
+            self.assertEqual(ledger.update(stopwatch, countdown, "2026-08-22"), 1539)
+            self.assertEqual(ledger.update(stopwatch, countdown, "2026-08-22"), 1539)
+
+            reset_countdown = {
+                "state": "idle",
+                "duration_seconds": 1500,
+                "remaining_seconds": 1500,
+            }
+            self.assertEqual(
+                ledger.update({"elapsed_seconds": 0}, reset_countdown, "2026-08-22"),
+                1539,
+            )
+            self.assertEqual(
+                ledger.update(
+                    {"elapsed_seconds": 120}, reset_countdown, "2026-08-22"
+                ),
+                1659,
+            )
+            ledger.flush()
+            self.assertEqual(DailyFocusLedger(str(path)).total("2026-08-22"), 1659)
+
+    def test_midnight_rollover_starts_a_clean_day(self):
+        ledger = DailyFocusLedger()
+        self.assertEqual(
+            ledger.update(
+                {"elapsed_seconds": 600},
+                {"duration_seconds": 1500, "remaining_seconds": 900},
+                "2026-08-22",
+            ),
+            1200,
+        )
+        self.assertEqual(
+            ledger.update(
+                {"elapsed_seconds": 600},
+                {"duration_seconds": 1500, "remaining_seconds": 900},
+                "2026-08-23",
+            ),
+            0,
         )
 
 
