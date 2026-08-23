@@ -151,8 +151,8 @@ cd firmware
 pio run -e m5stack-stopwatch-uac
 ```
 
-真机首次刷入应遵循项目根目录 `PROJECT.md`：先确认串口与原厂硬件，再进入官方 Download
-Mode，只写应用分区，不执行 `erase_flash`。
+真机首次刷入前先确认串口与原厂硬件，再进入官方 Download Mode；只写应用分区，不执行
+`erase_flash`。
 
 USB 烧录脚本同时把原厂 8 KiB `otadata` 恢复为空白状态并写入 `ota_0`，确保此前若由 OTA
 切到 `ota_1`，救援后也会重新选择刚写入的 `ota_0`。它不会擦除 NVS，已保存的 Wi-Fi、

@@ -1,7 +1,7 @@
 # M5 StopWatch Dashboard
 
-> Alice 的个人分支以好友@Googler0825 的开源 Dashboard 为底座；项目基线、当前加固、真机首次连接顺序
-> 与后续个性化路线见 [PROJECT.md](PROJECT.md)。
+> Alice 的个人分支以好友@Googler0825 的开源 Dashboard 为底座，并持续针对实际工作流、
+> 圆屏交互与本地隐私边界进行加固。
 
 这不是把电脑仪表盘硬塞进一块圆屏，而是 Alice 的一张桌面工作切片：它会报时、盯住专注、
 看看 Coding AI 今天忙成什么样，在真正重要的 AI 消息到来时尖叫一声，也会从 Obsidian 里
