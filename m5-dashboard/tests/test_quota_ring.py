@@ -232,7 +232,11 @@ class QuotaRingTests(unittest.TestCase):
     def test_running_focus_timer_preserves_its_anchor_and_uses_a_partial_patch(self):
         apply_state = function_source(self.source, "bool applyDashboardState(")
         self.assertIn("dashboardTimerPreserveRunningAnchor", apply_state)
+        self.assertIn("dashboardAlignedRunningTimerBase", apply_state)
+        self.assertIn("focusReconcileActive", apply_state)
         self.assertIn("oldTickTick.syncedAt", apply_state)
+        self.assertIn("previousStopwatchNow != nextStopwatchElapsed", apply_state)
+        self.assertIn("previousCountdownNow != nextCountdownRemaining", apply_state)
 
         partial = function_source(self.source, "void drawFocusHeroTimeOnly(")
         self.assertIn("focusHeroCanvas.fillSprite(background)", partial)
@@ -246,6 +250,20 @@ class QuotaRingTests(unittest.TestCase):
             "if (usbAudioStreaming || focusTimerNeedsRealtimeCpu) requireHighPerformance();",
             loop,
         )
+
+    def test_focus_action_uses_a_short_authoritative_reconcile_window(self):
+        action = function_source(self.source, "void performTickTickAction(")
+        self.assertIn("focusReconcileUntilAt = millis() + kFocusReconcileWindowMs", action)
+        refresh = function_source(self.source, "uint32_t dashboardStateRefreshInterval(")
+        self.assertIn("kFocusReconcileRefreshMs", refresh)
+
+    def test_charging_indicator_reacts_to_vbus_without_waiting_for_battery_poll(self):
+        power = function_source(self.source, "void updateDevicePower(")
+        self.assertIn("nextVbusPresent != deviceVbusPresent", power)
+        self.assertIn("chargingSettleRefreshMs", power)
+        self.assertIn("powerStatusNeedsRedraw = true", power)
+        loop = function_source(self.source, "void loop(")
+        self.assertIn("if (powerStatusNeedsRedraw && haveData", loop)
 
 
 if __name__ == "__main__":

@@ -113,6 +113,10 @@ constexpr int kFeatureActionTouchY = 330;
 constexpr int kFeaturePrimaryTouchWidth = 182;
 constexpr int kFeatureSecondaryTouchWidth = 76;
 constexpr int kFeatureActionTouchHeight = 78;
+// Physical taps on the C152 lower edge land below the design-space footer.
+// Match the clock/focus compensation so the whole visible capsule remains
+// reachable without moving the artwork or stealing the content row above it.
+constexpr int kFeatureActionLowerEdgeCompensation = 32;
 constexpr int kFeatureActionTapSlop = 32;
 constexpr int kFeatureHeroTouchX = 230;
 constexpr int kFeatureHeroTouchY = 96;
@@ -267,6 +271,15 @@ inline bool dashboardTimerPreserveRunningAnchor(bool wasRunning, bool isRunning,
   return delta <= toleranceSeconds;
 }
 
+inline int dashboardAlignedRunningTimerBase(int remoteSeconds,
+                                            uint32_t anchorAgeSeconds,
+                                            bool countsDown) {
+  int aligned = countsDown
+                    ? remoteSeconds + static_cast<int>(anchorAgeSeconds)
+                    : remoteSeconds - static_cast<int>(anchorAgeSeconds);
+  return aligned < 0 ? 0 : aligned;
+}
+
 inline DashboardClockTouchTarget dashboardClockTouchTarget(int x, int y) {
   if (x >= kClockOrbitTouchX && x < kClockOrbitTouchX + kClockActionTouchWidth &&
       y >= kClockActionTouchY &&
@@ -303,13 +316,15 @@ inline DashboardFeatureTouchTarget dashboardFeatureTouchTarget(int x, int y,
   if (x >= kFeaturePrimaryTouchX &&
       x < kFeaturePrimaryTouchX + kFeaturePrimaryTouchWidth &&
       y >= kFeatureActionTouchY &&
-      y < kFeatureActionTouchY + kFeatureActionTouchHeight) {
+      y < kFeatureActionTouchY + kFeatureActionTouchHeight +
+              kFeatureActionLowerEdgeCompensation) {
     return DashboardFeatureTouchTarget::primary;
   }
   if (x >= kFeatureSecondaryTouchX &&
       x < kFeatureSecondaryTouchX + kFeatureSecondaryTouchWidth &&
       y >= kFeatureActionTouchY &&
-      y < kFeatureActionTouchY + kFeatureActionTouchHeight) {
+      y < kFeatureActionTouchY + kFeatureActionTouchHeight +
+              kFeatureActionLowerEdgeCompensation) {
     return DashboardFeatureTouchTarget::secondary;
   }
   if (includeHero && x >= kFeatureHeroTouchX &&

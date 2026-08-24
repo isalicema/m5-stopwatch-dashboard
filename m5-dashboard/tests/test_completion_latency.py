@@ -18,7 +18,8 @@ class CompletionLatencyTests(unittest.TestCase):
         start = self.source.index("uint32_t dashboardStateRefreshInterval()")
         end = self.source.index("\n}\n", start)
         function = self.source[start:end]
-        self.assertIn(": kUsbRequestIntervalMs;", function)
+        self.assertIn("return kUsbRequestIntervalMs;", function)
+        self.assertIn("kFocusReconcileRefreshMs", function)
 
     def test_authenticated_bridge_beacon_triggers_one_immediate_state_fetch(self):
         self.assertIn('"M5DASH_EVENT_V1|completion|"', self.source)

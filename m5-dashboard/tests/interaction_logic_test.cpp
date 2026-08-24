@@ -97,6 +97,10 @@ int main() {
   assert(!dashboardTimerPreserveRunningAnchor(true, true, 68, 72));
   assert(!dashboardTimerPreserveRunningAnchor(false, true, 68, 68));
   assert(!dashboardTimerPreserveRunningAnchor(true, false, 68, 68));
+  assert(dashboardAlignedRunningTimerBase(71, 2, false) == 69);
+  assert(dashboardAlignedRunningTimerBase(68, 2, false) == 66);
+  assert(dashboardAlignedRunningTimerBase(68, 2, true) == 70);
+  assert(dashboardAlignedRunningTimerBase(1, 2, false) == 0);
 
   assert(dashboardRectInsideCircle(kEditorialHeaderX, kEditorialHeaderBoundsY,
                                    kEditorialHeaderBoundsWidth,
@@ -315,7 +319,16 @@ int main() {
          DashboardFeatureTouchTarget::primary);
   assert(dashboardFeatureTouchTarget(120, 407, false) ==
          DashboardFeatureTouchTarget::primary);
+  assert(dashboardFeatureTouchTarget(120, 430, false) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardFeatureTouchTarget(300, 430, false) ==
+         DashboardFeatureTouchTarget::secondary);
+  assert(dashboardFeatureTouchTarget(120, 439, false) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardFeatureTouchTarget(120, 440, false) ==
+         DashboardFeatureTouchTarget::none);
   assert(dashboardFeatureTapAccepted(DashboardGesture::none, 17, 17));
+  assert(dashboardFeatureTapAccepted(DashboardGesture::none, 0, 32));
   assert(dashboardFeatureTapAccepted(DashboardGesture::page, 31, -24));
   assert(!dashboardFeatureTapAccepted(DashboardGesture::page, 33, 0));
   assert(!dashboardFeatureTapAccepted(DashboardGesture::brightness, 4, 4));

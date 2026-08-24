@@ -263,9 +263,12 @@ uint32_t lastUsbStateAt = 0;
 uint32_t vibrationStopAt = 0;
 uint32_t lastBatteryReadAt = 0;
 uint32_t lastUsbConnectionReadAt = 0;
+uint32_t lastUsbPowerTransitionAt = 0;
 int deviceBatteryLevel = -1;
 bool deviceCharging = false;
 bool deviceUsbConnected = false;
+bool deviceVbusPresent = false;
+bool powerStatusNeedsRedraw = false;
 volatile bool screenLocked = false;
 bool pendingAiHotspotWake = false;
 DashboardPowerButtonState powerButtonState;
@@ -305,6 +308,7 @@ DashboardClickButtonState aClickState;
 DashboardClickButtonState bClickState;
 uint32_t lastTickTickDrawSecond = 0;
 bool focusPageNeedsFullRedraw = false;
+uint32_t focusReconcileUntilAt = 0;
 int lastClockDrawSecond = -1;
 int lastClockDrawMinute = -1;
 bool provisioningTouchPending = false;
@@ -451,8 +455,12 @@ constexpr uint32_t kPowerButtonDoubleClickMs = 500;
 constexpr uint32_t kPowerButtonLongPressMs = 1600;
 constexpr int kDisplayChipSelectPin = 39;
 constexpr uint8_t kTouchResetIoExpanderPin = 3;  // M5IOE1 gpio4.
-constexpr int kSwipeThreshold = 55;
+// A deliberate page swipe should not require crossing a large part of the
+// 466 px panel. Button-specific tap slop still protects the action capsules.
+constexpr int kSwipeThreshold = 45;
 constexpr int kGestureLockThreshold = 18;
+constexpr int kPageTransitionFrameCount = 8;
+constexpr int kPageTransitionFrameDelayMs = 2;
 constexpr int kControlTravelPixels = 300;
 constexpr int kControlStepPercent = 1;
 constexpr int kMinimumBrightnessPercent = 10;
@@ -521,6 +529,8 @@ constexpr uint32_t kAutoWifiSearchTimeoutMs = 60000;
 constexpr uint32_t kUsbRequestIntervalMs = 2000;
 constexpr uint32_t kUsbReplyGraceMs = 500;
 constexpr uint32_t kUsbStateStaleMs = 6000;
+constexpr uint32_t kFocusReconcileWindowMs = 4000;
+constexpr uint32_t kFocusReconcileRefreshMs = 300;
 // A cold Typeless launch may use the Bridge's 5 second helper timeout plus
 // its readiness delay. Generic dashboard actions remain at 3 seconds, while
 // this one must not report ERROR after the Mac has already started dictation.
@@ -1245,25 +1255,46 @@ void updatePowerButton() {
 }
 
 void updateDevicePower(bool force = false) {
+  uint32_t now = millis();
   constexpr uint32_t usbRefreshMs = 500;
   if (force || lastUsbConnectionReadAt == 0 ||
-      millis() - lastUsbConnectionReadAt >= usbRefreshMs) {
-    lastUsbConnectionReadAt = millis();
+      now - lastUsbConnectionReadAt >= usbRefreshMs) {
+    lastUsbConnectionReadAt = now;
     int vbusMillivolts = M5.Power.getVBUSVoltage();
-    deviceUsbConnected = vbusMillivolts >= 4000 || deviceCharging;
+    bool nextVbusPresent = vbusMillivolts >= 4000;
+    if (nextVbusPresent != deviceVbusPresent) {
+      deviceVbusPresent = nextVbusPresent;
+      lastUsbPowerTransitionAt = now;
+      // The PMIC charging flag settles shortly after VBUS changes. Bypass the
+      // normal battery interval now, then sample it quickly during that window.
+      lastBatteryReadAt = 0;
+    }
+    deviceUsbConnected = deviceVbusPresent || deviceCharging;
   }
 
-  constexpr uint32_t refreshMs = 15000;
-  if (!force && lastBatteryReadAt != 0 && millis() - lastBatteryReadAt < refreshMs) return;
-  lastBatteryReadAt = millis();
+  constexpr uint32_t batteryRefreshMs = 15000;
+  constexpr uint32_t chargingSettleWindowMs = 3000;
+  constexpr uint32_t chargingSettleRefreshMs = 250;
+  bool chargingSettling =
+      lastUsbPowerTransitionAt != 0 &&
+      now - lastUsbPowerTransitionAt < chargingSettleWindowMs;
+  uint32_t refreshMs = chargingSettling ? chargingSettleRefreshMs
+                                        : batteryRefreshMs;
+  if (!force && lastBatteryReadAt != 0 &&
+      now - lastBatteryReadAt < refreshMs) {
+    return;
+  }
+  lastBatteryReadAt = now;
+  bool previousCharging = deviceCharging;
   int level = M5.Power.getBatteryLevel();
   deviceBatteryLevel = level >= 0 ? max(0, min(100, level)) : -1;
   deviceCharging =
       M5.Power.isCharging() == m5::Power_Class::is_charging_t::is_charging;
   // Charging can become false at 100%, while VBUS still needs to reserve the
   // PMIC's USB + 2 second Download Mode action.
-  int vbusMillivolts = M5.Power.getVBUSVoltage();
-  deviceUsbConnected = vbusMillivolts >= 4000 || deviceCharging;
+  deviceVbusPresent = M5.Power.getVBUSVoltage() >= 4000;
+  deviceUsbConnected = deviceVbusPresent || deviceCharging;
+  if (deviceCharging != previousCharging) powerStatusNeedsRedraw = true;
 }
 
 bool typelessUsbAvailable() {
@@ -3067,6 +3098,7 @@ void drawClockPage() {
     lastClockDrawMinute = -1;
   }
   drawBatteryStatusAt(mint, ink, 326, 76, false);
+  powerStatusNeedsRedraw = false;
 
   String weatherText = weather.available
                            ? weather.label + " · " + String(weather.temperatureC, 0) + "℃"
@@ -4267,13 +4299,26 @@ bool applyDashboardState(JsonDocument &doc) {
                      timerRunning(oldTickTick.countdownState),
                      timerRunning(nextCountdownState), previousCountdownNow,
                      nextCountdownRemaining);
+  bool focusReconcileActive =
+      focusReconcileUntilAt != 0 &&
+      static_cast<int32_t>(focusReconcileUntilAt - millis()) > 0;
+  uint32_t oldAnchorAgeSeconds =
+      oldTickTick.syncedAt == 0
+          ? 0
+          : static_cast<uint32_t>(millis() - oldTickTick.syncedAt) / 1000;
   ticktick.stopwatchState = nextStopwatchState;
-  ticktick.stopwatchElapsed = preserveStopwatchAnchor
-                                  ? oldTickTick.stopwatchElapsed
-                                  : nextStopwatchElapsed;
+  ticktick.stopwatchElapsed =
+      preserveStopwatchAnchor && focusReconcileActive
+          ? dashboardAlignedRunningTimerBase(nextStopwatchElapsed,
+                                             oldAnchorAgeSeconds, false)
+          : preserveStopwatchAnchor ? oldTickTick.stopwatchElapsed
+                                    : nextStopwatchElapsed;
   ticktick.countdownState = nextCountdownState;
-  ticktick.countdownRemaining = preserveCountdownAnchor
-                                    ? oldTickTick.countdownRemaining
+  ticktick.countdownRemaining =
+      preserveCountdownAnchor && focusReconcileActive
+          ? dashboardAlignedRunningTimerBase(nextCountdownRemaining,
+                                             oldAnchorAgeSeconds, true)
+          : preserveCountdownAnchor ? oldTickTick.countdownRemaining
                                     : nextCountdownRemaining;
   ticktick.todayFocusSeconds = t["today_focus_seconds"] | 0;
   ticktick.error = String(static_cast<const char *>(t["error"] | ""));
@@ -4285,6 +4330,10 @@ bool applyDashboardState(JsonDocument &doc) {
        oldTickTick.stopwatchState != ticktick.stopwatchState ||
        oldTickTick.countdownState != ticktick.countdownState ||
        oldTickTick.countdownDuration != ticktick.countdownDuration ||
+       (!timerRunning(ticktick.stopwatchState) &&
+        previousStopwatchNow != nextStopwatchElapsed) ||
+       (!timerRunning(ticktick.countdownState) &&
+        previousCountdownNow != nextCountdownRemaining) ||
        oldTickTick.error != ticktick.error)) {
     focusPageNeedsFullRedraw = true;
   }
@@ -4835,6 +4884,11 @@ void performTickTickAction(const String &action) {
   // can take several seconds while TickTick's UI command is confirmed; the
   // following authoritative state response will still reconcile this preview.
   applyOptimisticTickTickAction(action);
+  // TickTick's authoritative pause/resume value may land just after the local
+  // optimistic preview. Reconcile briefly at high cadence, then return to the
+  // normal low-frequency dashboard polling interval.
+  focusReconcileUntilAt = millis() + kFocusReconcileWindowMs;
+  lastFetchAt = 0;
   if (usbBridgeOnline) {
     sendUsbDashboardAction(action);
   } else {
@@ -4970,8 +5024,14 @@ void handleUsbResponse(const String &line) {
 }
 
 uint32_t dashboardStateRefreshInterval() {
-  return overlayMode == OverlayMode::transcript ? kTranscriptRefreshMs
-                                                : kUsbRequestIntervalMs;
+  if (overlayMode == OverlayMode::transcript) return kTranscriptRefreshMs;
+  if (focusReconcileUntilAt != 0) {
+    if (static_cast<int32_t>(focusReconcileUntilAt - millis()) > 0) {
+      return kFocusReconcileRefreshMs;
+    }
+    focusReconcileUntilAt = 0;
+  }
+  return kUsbRequestIntervalMs;
 }
 
 void updateUsbBridge() {
@@ -5052,6 +5112,9 @@ void processDiscoveryResponses() {
 
 void updateCompletionFetchHint() {
   if (!completionFetchPending) return;
+  // Completion feedback is durable in Bridge state. Let the current finger
+  // gesture finish, then fetch it, instead of blocking touch sampling mid-swipe.
+  if (touchPending) return;
   uint32_t now = millis();
   if (usbBridgeOnline) {
     if (usbReplyPending(now, lastUsbRequestAt, kUsbReplyGraceMs)) return;
@@ -5271,8 +5334,8 @@ void changePage(int delta) {
   renderCurrentPage(renderNow, renderBackground);
   markRenderDiagnostic(130, nextPage);
 
-  constexpr int frameCount = 10;
-  constexpr int frameDurationMs = 14;
+  constexpr int frameCount = kPageTransitionFrameCount;
+  constexpr int frameDurationMs = kPageTransitionFrameDelayMs;
   int displayWidth = kUiFrameSize;
   int displayOffsetX = displayFrameOffsetX();
   int displayOffsetY = displayFrameOffsetY();
@@ -5453,6 +5516,10 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
 
 void updateTouchInteraction(const m5::touch_detail_t &touch) {
   if (completionAnimationRunning) {
+    // A completion overlay owns the display and cancels the gesture beneath it.
+    // Do not leave touch-priority background deferral latched after the overlay.
+    activeGesture = DashboardGesture::none;
+    touchPending = false;
     if (touch.wasReleased()) {
       completionAnimationRunning = false;
       drawCurrentPage();
@@ -5637,6 +5704,16 @@ void updateTouchInteraction(const m5::touch_detail_t &touch) {
       if (dashboardFocusTouchTarget(designX, designY) !=
           DashboardFocusTouchTarget::none) {
         gestureThreshold = kFocusActionTapSlop + 1;
+      }
+    } else if (currentPage == 5 || currentPage == 6) {
+      int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
+      int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
+      if (dashboardFeatureTouchTarget(designX, designY, currentPage == 6) !=
+          DashboardFeatureTouchTarget::none) {
+        // Keep a fingertip armed while it settles on the lower capsule. Without
+        // this page-specific threshold, a small vertical drift is classified as
+        // brightness/volume before release and the action never receives its tap.
+        gestureThreshold = kFeatureActionTapSlop + 1;
       }
     }
     activeGesture = classifyDashboardGesture(
@@ -6581,12 +6658,21 @@ void loop() {
     }
   }
 
+  // Touch owns the loop before USB parsing, Wi-Fi maintenance, discovery and
+  // state refresh. This prevents a scheduled two-second sync from making a
+  // swipe feel intermittent or from redrawing under the moving fingertip.
+  markProviderLoopDiagnostic(640);
+  auto touch = M5.Touch.getDetail();
+  updateTouchInteraction(touch);
+  markProviderLoopDiagnostic(641);
+
   markProviderLoopDiagnostic(630);
   bool hadDataBeforeUsbUpdate = haveData;
-  updateUsbBridge();
+  if (!touchPending) updateUsbBridge();
   if (!hadDataBeforeUsbUpdate && haveData &&
       appMode == DashboardAppMode::dashboard && currentPage == 0 &&
-      overlayMode == OverlayMode::none && !completionAnimationRunning) {
+      overlayMode == OverlayMode::none && !completionAnimationRunning &&
+      !touchPending) {
     // The launcher can enter Dashboard before the first USB state reply. The
     // screen then contains drawConnectingPage(), not the Clock surface. Paint
     // the complete Clock once before its seconds-only patch is allowed to run.
@@ -6594,24 +6680,28 @@ void loop() {
   }
   if (focusPageNeedsFullRedraw && haveData &&
       appMode == DashboardAppMode::dashboard && currentPage == 1 &&
-      overlayMode == OverlayMode::none && !completionAnimationRunning) {
+      overlayMode == OverlayMode::none && !completionAnimationRunning &&
+      !touchPending) {
+    drawCurrentPage();
+  }
+  if (powerStatusNeedsRedraw && haveData &&
+      appMode == DashboardAppMode::dashboard && currentPage == 0 &&
+      overlayMode == OverlayMode::none && !completionAnimationRunning &&
+      !touchPending) {
     drawCurrentPage();
   }
   markProviderLoopDiagnostic(631);
-  connectWifi();
+  if (!touchPending) connectWifi();
   markProviderLoopDiagnostic(632);
   if (configMode) {
     delay(2);
     return;
   }
-  updateBridgeDiscovery();
-  updateCompletionFetchHint();
+  if (!touchPending) {
+    updateBridgeDiscovery();
+    updateCompletionFetchHint();
+  }
   markProviderLoopDiagnostic(633);
-
-  auto touch = M5.Touch.getDetail();
-  markProviderLoopDiagnostic(640);
-  updateTouchInteraction(touch);
-  markProviderLoopDiagnostic(641);
 
   uint32_t tickSecond = millis() / 1000;
   if (haveData && appMode == DashboardAppMode::dashboard && currentPage == 0 &&
@@ -6636,7 +6726,8 @@ void loop() {
     drawFocusHeroTimeOnly();
   }
 
-  if (millis() - lastFetchAt >= dashboardStateRefreshInterval() &&
+  if (!touchPending &&
+      millis() - lastFetchAt >= dashboardStateRefreshInterval() &&
       !usbReplyPending(millis(), lastUsbRequestAt, kUsbReplyGraceMs)) {
     lastFetchAt = millis();
     bool hadDataBeforeFetch = haveData;

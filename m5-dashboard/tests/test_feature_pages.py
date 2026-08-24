@@ -39,10 +39,31 @@ class FeaturePageTests(unittest.TestCase):
     def test_feature_footer_tolerates_fingertip_drift_without_stealing_swipes(self):
         self.assertIn("kFeatureActionTouchY = 330", self.interaction)
         self.assertIn("kFeatureActionTouchHeight = 78", self.interaction)
+        self.assertIn("kFeatureActionLowerEdgeCompensation = 32", self.interaction)
         self.assertIn("kFeatureActionTapSlop = 32", self.interaction)
         self.assertIn("dashboardFeatureTapAccepted", self.interaction)
         self.assertIn("bool featureTap = (currentPage == 5 || currentPage == 6)", self.source)
+        self.assertIn("gestureThreshold = kFeatureActionTapSlop + 1", self.source)
         self.assertIn("abs(touch.distanceX()) >= kSwipeThreshold", self.source)
+
+    def test_page_swipes_prioritize_touch_over_background_refresh(self):
+        self.assertIn("constexpr int kSwipeThreshold = 45;", self.source)
+        self.assertIn("constexpr int kPageTransitionFrameCount = 8;", self.source)
+        self.assertIn("constexpr int kPageTransitionFrameDelayMs = 2;", self.source)
+        loop_start = self.source.index("void loop()")
+        loop = self.source[loop_start:]
+        self.assertLess(
+            loop.index("updateTouchInteraction(touch);"),
+            loop.index("if (!touchPending) updateUsbBridge();"),
+        )
+        self.assertIn("if (touchPending) return;", self.source)
+        self.assertIn("if (!touchPending &&\n      millis() - lastFetchAt", loop)
+        completion_touch = self.source[
+            self.source.index("void updateTouchInteraction(") :
+            self.source.index("if (overlayMode == OverlayMode::orbit", self.source.index("void updateTouchInteraction("))
+        ]
+        self.assertIn("activeGesture = DashboardGesture::none;", completion_touch)
+        self.assertIn("touchPending = false;", completion_touch)
 
     def test_obsidian_open_has_clear_haptic_feedback(self):
         self.assertIn(
