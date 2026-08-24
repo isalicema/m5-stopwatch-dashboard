@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import shlex
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -221,6 +223,7 @@ class InstallTests(unittest.TestCase):
             (project / "bridge/__init__.py").write_text("", encoding="utf-8")
             (project / "config.example.json").write_text("{}\n", encoding="utf-8")
             helper = target / "bin/M5ClaudeNotify"
+            fanout = target / "bin/M5ClaudeStopFanout"
             p = {
                 "project": project,
                 "target": target,
@@ -228,19 +231,55 @@ class InstallTests(unittest.TestCase):
                 "config": target / "config.json",
                 "claude_settings": settings,
                 "claude_notify_helper": helper,
+                "claude_stop_fanout_helper": fanout,
             }
 
             self.installer.install_claude_completion_hook(p)
             self.installer.install_claude_completion_hook(p)
 
             installed = json.loads(settings.read_text(encoding="utf-8"))
+            self.assertEqual(len(installed["hooks"]["Stop"]), 1)
             handlers = [
                 handler
                 for group in installed["hooks"]["Stop"]
                 for handler in group["hooks"]
             ]
-            self.assertEqual(sum(handler["command"] == peon for handler in handlers), 1)
-            self.assertEqual(sum(handler["command"] == str(helper) for handler in handlers), 1)
+            self.assertEqual(len(handlers), 1)
+            self.assertEqual(
+                handlers[0]["command"],
+                " ".join(shlex.quote(item) for item in (str(fanout), peon, str(helper))),
+            )
+
+    def test_claude_stop_fanout_delivers_the_same_payload_to_sound_and_m5(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            peon_output = root / "peon.json"
+            m5_output = root / "m5.json"
+            peon = root / "peon.sh"
+            m5 = root / "m5.sh"
+            peon.write_text(
+                "#!/bin/bash\n/bin/cat > %s\n" % shlex.quote(str(peon_output)),
+                encoding="utf-8",
+            )
+            m5.write_text(
+                "#!/bin/bash\nprintf '%%s' \"$1\" > %s\n" % shlex.quote(str(m5_output)),
+                encoding="utf-8",
+            )
+            peon.chmod(0o755)
+            m5.chmod(0o755)
+            fanout = Path(__file__).resolve().parents[1] / "mac/M5ClaudeStopFanout.sh"
+            payload = '{"hook_event_name":"Stop","session_id":"test-session"}'
+
+            result = subprocess.run(
+                [str(fanout), str(peon), str(m5)],
+                input=payload,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(peon_output.read_text(encoding="utf-8"), payload)
+            self.assertEqual(m5_output.read_text(encoding="utf-8"), payload)
 
     def test_audio_helper_builds_from_tracked_source(self):
         with tempfile.TemporaryDirectory() as temporary:

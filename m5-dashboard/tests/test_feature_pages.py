@@ -117,9 +117,28 @@ class FeaturePageTests(unittest.TestCase):
         self.assertNotIn('canvas.drawString("亿", left + numberWidth, y + 34);', self.source)
 
     def test_clock_shortcuts_do_not_overlap_the_information_pills(self):
-        self.assertIn("constexpr int kClockActionTouchY = 340;", self.interaction)
-        self.assertIn("constexpr int kClockActionTouchHeight = 60;", self.interaction)
+        self.assertIn("constexpr int kClockActionTouchY = 336;", self.interaction)
+        self.assertIn("constexpr int kClockActionTouchHeight = 64;", self.interaction)
+        self.assertIn(
+            "constexpr int kClockActionLowerEdgeCompensation = 32;",
+            self.interaction,
+        )
+        self.assertIn("constexpr int kClockActionTapSlop = 34;", self.interaction)
+        self.assertIn("dashboardClockTapAccepted", self.interaction)
         self.assertIn("ordinary taps on weather/AI usage", self.interaction)
+        self.assertIn("Physical samples from the C152 lower edge", self.interaction)
+
+    def test_clock_shortcuts_win_over_small_global_gesture_drift(self):
+        self.assertIn("bool clockShortcutTap =", self.source)
+        self.assertLess(
+            self.source.index("if (clockShortcutTap)"),
+            self.source.index("abs(touch.distanceX()) >= kSwipeThreshold"),
+        )
+        self.assertIn("gestureThreshold = kClockActionTapSlop + 1;", self.source)
+        self.assertIn(
+            "clockTarget == DashboardClockTouchTarget::results ? 64 : 55",
+            self.source,
+        )
 
     def test_clock_seconds_use_larger_integrated_geometry_and_refresh_only_the_patch(self):
         self.assertIn("constexpr int kClockSecondTextX = 342;", self.source)

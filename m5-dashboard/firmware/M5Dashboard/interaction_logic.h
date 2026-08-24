@@ -71,9 +71,18 @@ constexpr int kClockResultsTouchX = 225;
 // Keep the shortcut targets close to their Y=344..392 visual capsules. The old
 // Y=326 start left only a 2 px gap below the Y=282..324 information pills, so
 // ordinary taps on weather/AI usage could be interpreted as shortcut taps.
-constexpr int kClockActionTouchY = 340;
+constexpr int kClockActionTouchY = 336;
 constexpr int kClockActionTouchWidth = 136;
-constexpr int kClockActionTouchHeight = 60;
+constexpr int kClockActionTouchHeight = 64;
+// Physical samples from the C152 lower edge report the visual Y=344..392
+// shortcut capsules around design Y=400..425. Extend only downward: the round
+// panel clips the unreachable rectangle corners, and the information pills
+// above the shortcuts remain outside the target.
+constexpr int kClockActionLowerEdgeCompensation = 32;
+// A fingertip on the lower half of the round panel commonly drifts farther
+// than the global 18 px gesture lock. Keep the shortcut armed through that
+// small drift; a deliberate page swipe still clears this threshold easily.
+constexpr int kClockActionTapSlop = 34;
 
 constexpr int kProviderIconX = 296;
 constexpr int kProviderIconY = 150;
@@ -131,6 +140,8 @@ constexpr int kFocusActionTouchY = 338;
 constexpr int kFocusPrimaryTouchWidth = 182;
 constexpr int kFocusEndTouchWidth = 76;
 constexpr int kFocusActionTouchHeight = 66;
+constexpr int kFocusActionLowerEdgeCompensation = 32;
+constexpr int kFocusActionTapSlop = 34;
 
 constexpr int dashboardSquared(int value) {
   return value * value;
@@ -227,26 +238,54 @@ static_assert(dashboardRectInsideCircle(kFeatureHeroTouchX, kFeatureHeroTouchY,
 
 inline DashboardFocusTouchTarget dashboardFocusTouchTarget(int x, int y) {
   if (x >= kFocusPrimaryTouchX && x < kFocusPrimaryTouchX + kFocusPrimaryTouchWidth &&
-      y >= kFocusActionTouchY && y < kFocusActionTouchY + kFocusActionTouchHeight) {
+      y >= kFocusActionTouchY &&
+      y < kFocusActionTouchY + kFocusActionTouchHeight +
+              kFocusActionLowerEdgeCompensation) {
     return DashboardFocusTouchTarget::primary;
   }
   if (x >= kFocusEndTouchX && x < kFocusEndTouchX + kFocusEndTouchWidth &&
-      y >= kFocusActionTouchY && y < kFocusActionTouchY + kFocusActionTouchHeight) {
+      y >= kFocusActionTouchY &&
+      y < kFocusActionTouchY + kFocusActionTouchHeight +
+              kFocusActionLowerEdgeCompensation) {
     return DashboardFocusTouchTarget::end;
   }
   return DashboardFocusTouchTarget::none;
 }
 
+inline bool dashboardFocusTapAccepted(int deltaX, int deltaY) {
+  return deltaX >= -kFocusActionTapSlop && deltaX <= kFocusActionTapSlop &&
+         deltaY >= -kFocusActionTapSlop && deltaY <= kFocusActionTapSlop;
+}
+
+inline bool dashboardTimerPreserveRunningAnchor(bool wasRunning, bool isRunning,
+                                                int localSeconds,
+                                                int remoteSeconds,
+                                                int toleranceSeconds = 3) {
+  if (!wasRunning || !isRunning || toleranceSeconds < 0) return false;
+  int delta = remoteSeconds - localSeconds;
+  if (delta < 0) delta = -delta;
+  return delta <= toleranceSeconds;
+}
+
 inline DashboardClockTouchTarget dashboardClockTouchTarget(int x, int y) {
   if (x >= kClockOrbitTouchX && x < kClockOrbitTouchX + kClockActionTouchWidth &&
-      y >= kClockActionTouchY && y < kClockActionTouchY + kClockActionTouchHeight) {
+      y >= kClockActionTouchY &&
+      y < kClockActionTouchY + kClockActionTouchHeight +
+              kClockActionLowerEdgeCompensation) {
     return DashboardClockTouchTarget::orbit;
   }
   if (x >= kClockResultsTouchX && x < kClockResultsTouchX + kClockActionTouchWidth &&
-      y >= kClockActionTouchY && y < kClockActionTouchY + kClockActionTouchHeight) {
+      y >= kClockActionTouchY &&
+      y < kClockActionTouchY + kClockActionTouchHeight +
+              kClockActionLowerEdgeCompensation) {
     return DashboardClockTouchTarget::results;
   }
   return DashboardClockTouchTarget::none;
+}
+
+inline bool dashboardClockTapAccepted(int deltaX, int deltaY) {
+  return deltaX >= -kClockActionTapSlop && deltaX <= kClockActionTapSlop &&
+         deltaY >= -kClockActionTapSlop && deltaY <= kClockActionTapSlop;
 }
 
 inline bool dashboardVoiceTouchTarget(int x, int y) {

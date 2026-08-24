@@ -52,6 +52,7 @@ M5Canvas frameCanvas(&M5.Display);
 M5Canvas transitionCanvas(&M5.Display);
 M5Canvas stopwatchTimeCanvas(&M5.Display);
 M5Canvas clockSecondCanvas(&M5.Display);
+M5Canvas focusHeroCanvas(&M5.Display);
 M5Canvas aiHotspotBurstCanvas(&M5.Display);
 
 #if M5DASH_HAS_NOTO_UI_FONT
@@ -82,6 +83,7 @@ bool editorialBold80FontReady = false;
 bool editorialBold104FontReady = false;
 bool stopwatchTimeCanvasReady = false;
 bool clockSecondCanvasReady = false;
+bool focusHeroCanvasReady = false;
 bool aiHotspotBurstCanvasReady = false;
 
 constexpr size_t kMaxTranscriptTasks = 3;
@@ -302,6 +304,7 @@ uint32_t bButtonPressedAt = 0;
 DashboardClickButtonState aClickState;
 DashboardClickButtonState bClickState;
 uint32_t lastTickTickDrawSecond = 0;
+bool focusPageNeedsFullRedraw = false;
 int lastClockDrawSecond = -1;
 int lastClockDrawMinute = -1;
 bool provisioningTouchPending = false;
@@ -479,6 +482,10 @@ constexpr int kClockSecondUnderlineX = 316;
 constexpr int kClockSecondUnderlineY = 253;
 constexpr int kClockSecondUnderlineWidth = 52;
 constexpr int kClockSecondUnderlineHeight = 5;
+constexpr int kFocusHeroPatchX = 20;
+constexpr int kFocusHeroPatchY = 145;
+constexpr int kFocusHeroPatchWidth = 400;
+constexpr int kFocusHeroPatchHeight = 120;
 constexpr int kStopwatchFooterY = 408;
 constexpr uint32_t kStopwatchFrameIntervalMs = 20;
 constexpr int kDashboardRingCenterX = 225;
@@ -841,6 +848,19 @@ void useEditorialHero104() {
   canvas.setFont(&fonts::Font8);
 #endif
   canvas.setTextSize(1);
+}
+
+void useEditorialHero104(M5Canvas &target) {
+#if M5DASH_HAS_NOTO_UI_FONT
+  if (editorialBold104FontReady) {
+    target.setFont(&editorialBold104Font);
+  } else {
+    target.setFont(&fonts::Font8);
+  }
+#else
+  target.setFont(&fonts::Font8);
+#endif
+  target.setTextSize(1);
 }
 
 void useEditorialHero80() {
@@ -3112,7 +3132,8 @@ void drawClockSecondOnly(const struct tm &local) {
   lastClockDrawMinute = local.tm_hour * 60 + local.tm_min;
 }
 
-void drawFocusHeroTime(const String &value, uint16_t ink) {
+void drawFocusHeroTime(M5Canvas &target, int originX, int originY,
+                       const String &value, uint16_t ink) {
   String primary = value;
   String seconds;
   if (value.length() > 5) {
@@ -3123,17 +3144,21 @@ void drawFocusHeroTime(const String &value, uint16_t ink) {
     }
   }
 
-  canvas.setTextColor(ink);
-  canvas.setTextDatum(middle_left);
-  useEditorialHero104();
-  canvas.drawString(primary, 28, 205);
+  target.setTextColor(ink);
+  target.setTextDatum(middle_left);
+  useEditorialHero104(target);
+  target.drawString(primary, 28 - originX, 205 - originY);
 
   if (seconds.length() > 0) {
-    canvas.setTextDatum(middle_center);
-    useEditorialBold24();
-    canvas.drawString(seconds, 382, 225);
-    canvas.fillRect(359, 250, 46, 5, ink);
+    target.setTextDatum(middle_center);
+    useEditorialBold24(target);
+    target.drawString(seconds, 382 - originX, 225 - originY);
+    target.fillRect(359 - originX, 250 - originY, 46, 5, ink);
   }
+}
+
+void drawFocusHeroTime(const String &value, uint16_t ink) {
+  drawFocusHeroTime(canvas, 0, 0, value, ink);
 }
 
 void drawFocusModeOption(int x, int width, const String &key, const String &label,
@@ -3221,6 +3246,34 @@ void drawFocusPage() {
   drawFocusModeOption(52, 175, "A", "正计时", stopwatchMode, background, ink, yellow);
   drawFocusModeOption(225, 175, "B", "25分钟", !stopwatchMode, background, ink, yellow);
   drawFocusActions(stopwatchMode ? "A" : "B", running, paused, background, ink);
+  lastTickTickDrawSecond = running ? millis() / 1000 : 0;
+  focusPageNeedsFullRedraw = false;
+}
+
+void drawFocusHeroTimeOnly() {
+  if (!focusHeroCanvasReady) {
+    drawCurrentPage();
+    return;
+  }
+  const uint16_t background = editorialPaperColor();
+  const uint16_t ink = rgb(5, 5, 5);
+  const uint16_t coral = rgb(255, 59, 48);
+  bool stopwatchMode = focusUsesStopwatchMode();
+  String heroValue = stopwatchMode ? formatTimerSeconds(currentStopwatchElapsed())
+                                   : formatTimerSeconds(currentCountdownRemaining());
+
+  focusHeroCanvas.fillSprite(background);
+  focusHeroCanvas.fillSmoothCircle(364 - kFocusHeroPatchX,
+                                   130 - kFocusHeroPatchY, 164, coral);
+  drawFocusHeroTime(focusHeroCanvas, kFocusHeroPatchX, kFocusHeroPatchY,
+                    heroValue, ink);
+  int frameOffset = designFrameOffset();
+  M5.Display.startWrite();
+  focusHeroCanvas.pushSprite(
+      displayFrameOffsetX() + frameOffset + kFocusHeroPatchX,
+      displayFrameOffsetY() + frameOffset + kFocusHeroPatchY);
+  M5.Display.endWrite();
+  lastTickTickDrawSecond = millis() / 1000;
 }
 
 String providerEditorialStatus(const CodexData &provider) {
@@ -4185,6 +4238,8 @@ bool applyDashboardState(JsonDocument &doc) {
   CodexData oldCodex = codex;
   AIHotspotData oldAiHotspot = aiHotspot;
   bool hadData = haveData;
+  int previousStopwatchNow = currentStopwatchElapsed();
+  int previousCountdownNow = currentCountdownRemaining();
   if (hadData && lastStateAppliedAt != 0 &&
       static_cast<uint32_t>(millis() - lastStateAppliedAt) > kCompletionStateGapMs) {
     completionBaselineReady = false;
@@ -4193,15 +4248,46 @@ bool applyDashboardState(JsonDocument &doc) {
   JsonObject t = doc["ticktick"];
   ticktick.connected = t["connected"] | false;
   JsonObject stopwatch = t["stopwatch"];
-  ticktick.stopwatchState = String(static_cast<const char *>(stopwatch["state"] | "idle"));
-  ticktick.stopwatchElapsed = stopwatch["elapsed_seconds"] | 0;
+  String nextStopwatchState =
+      String(static_cast<const char *>(stopwatch["state"] | "idle"));
+  int nextStopwatchElapsed = stopwatch["elapsed_seconds"] | 0;
   JsonObject countdown = t["countdown"];
-  ticktick.countdownState = String(static_cast<const char *>(countdown["state"] | "idle"));
+  String nextCountdownState =
+      String(static_cast<const char *>(countdown["state"] | "idle"));
   ticktick.countdownDuration = countdown["duration_seconds"] | 1500;
-  ticktick.countdownRemaining = countdown["remaining_seconds"] | ticktick.countdownDuration;
+  int nextCountdownRemaining =
+      countdown["remaining_seconds"] | ticktick.countdownDuration;
+  bool preserveStopwatchAnchor =
+      hadData && dashboardTimerPreserveRunningAnchor(
+                     timerRunning(oldTickTick.stopwatchState),
+                     timerRunning(nextStopwatchState), previousStopwatchNow,
+                     nextStopwatchElapsed);
+  bool preserveCountdownAnchor =
+      hadData && dashboardTimerPreserveRunningAnchor(
+                     timerRunning(oldTickTick.countdownState),
+                     timerRunning(nextCountdownState), previousCountdownNow,
+                     nextCountdownRemaining);
+  ticktick.stopwatchState = nextStopwatchState;
+  ticktick.stopwatchElapsed = preserveStopwatchAnchor
+                                  ? oldTickTick.stopwatchElapsed
+                                  : nextStopwatchElapsed;
+  ticktick.countdownState = nextCountdownState;
+  ticktick.countdownRemaining = preserveCountdownAnchor
+                                    ? oldTickTick.countdownRemaining
+                                    : nextCountdownRemaining;
   ticktick.todayFocusSeconds = t["today_focus_seconds"] | 0;
   ticktick.error = String(static_cast<const char *>(t["error"] | ""));
-  ticktick.syncedAt = millis();
+  ticktick.syncedAt = (preserveStopwatchAnchor || preserveCountdownAnchor)
+                          ? oldTickTick.syncedAt
+                          : millis();
+  if (hadData &&
+      (oldTickTick.connected != ticktick.connected ||
+       oldTickTick.stopwatchState != ticktick.stopwatchState ||
+       oldTickTick.countdownState != ticktick.countdownState ||
+       oldTickTick.countdownDuration != ticktick.countdownDuration ||
+       oldTickTick.error != ticktick.error)) {
+    focusPageNeedsFullRedraw = true;
+  }
 
   JsonObject c = doc["codex"];
   codex.connected = c["connected"] | false;
@@ -5261,13 +5347,47 @@ void updateGestureControl(const m5::touch_detail_t &touch) {
 
 void finishTouchGesture(const m5::touch_detail_t &touch) {
   DashboardGesture finishedGesture = activeGesture;
+  int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
+  int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
+  DashboardFocusTouchTarget focusTarget = currentPage == 1
+                                              ? dashboardFocusTouchTarget(designX, designY)
+                                              : DashboardFocusTouchTarget::none;
+  bool focusShortcutTap =
+      focusTarget != DashboardFocusTouchTarget::none &&
+      dashboardFocusTapAccepted(touch.distanceX(), touch.distanceY());
+  DashboardClockTouchTarget clockTarget = currentPage == 0
+                                              ? dashboardClockTouchTarget(designX, designY)
+                                              : DashboardClockTouchTarget::none;
+  bool clockShortcutTap =
+      clockTarget != DashboardClockTouchTarget::none &&
+      dashboardClockTapAccepted(touch.distanceX(), touch.distanceY());
   bool featureTap = (currentPage == 5 || currentPage == 6) &&
                     dashboardFeatureTapAccepted(
                         finishedGesture, touch.distanceX(), touch.distanceY());
   bool ordinaryTap = finishedGesture == DashboardGesture::none &&
                      abs(touch.distanceX()) < kGestureLockThreshold &&
                      abs(touch.distanceY()) < kGestureLockThreshold;
-  if (finishedGesture == DashboardGesture::page &&
+  if (focusShortcutTap) {
+    bool stopwatchMode = focusUsesStopwatchMode();
+    String action = focusTarget == DashboardFocusTouchTarget::primary
+                        ? stopwatchMode ? "stopwatch-click" : "countdown-click"
+                        : stopwatchMode ? "stopwatch-end" : "countdown-end";
+    activeGesture = DashboardGesture::none;
+    touchPending = false;
+    performTickTickAction(action);
+    return;
+  } else if (clockShortcutTap) {
+    selectedResult = -1;
+    overlayMode = clockTarget == DashboardClockTouchTarget::orbit
+                      ? OverlayMode::orbit
+                      : OverlayMode::results;
+    startVibration(clockTarget == DashboardClockTouchTarget::results ? 64 : 55,
+                   clockTarget == DashboardClockTouchTarget::results ? 30 : 28);
+    drawCurrentPage();
+    activeGesture = DashboardGesture::none;
+    touchPending = false;
+    return;
+  } else if (finishedGesture == DashboardGesture::page &&
       abs(touch.distanceX()) >= kSwipeThreshold) {
     changePage(touch.distanceX() < 0 ? 1 : -1);
     // If this marker is never observed after a PANIC, the failure is detected
@@ -5283,41 +5403,6 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
     }
     drawCurrentPage();
   } else if (ordinaryTap || featureTap) {
-    int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
-    int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
-    if (currentPage == 1) {
-      DashboardFocusTouchTarget target = dashboardFocusTouchTarget(designX, designY);
-      if (target != DashboardFocusTouchTarget::none) {
-        bool stopwatchMode = focusUsesStopwatchMode();
-        String action = target == DashboardFocusTouchTarget::primary
-                            ? stopwatchMode ? "stopwatch-click" : "countdown-click"
-                            : stopwatchMode ? "stopwatch-end" : "countdown-end";
-        activeGesture = DashboardGesture::none;
-        touchPending = false;
-        performTickTickAction(action);
-        return;
-      }
-    }
-    if (currentPage == 0) {
-      DashboardClockTouchTarget target = dashboardClockTouchTarget(designX, designY);
-      if (target == DashboardClockTouchTarget::orbit) {
-        overlayMode = OverlayMode::orbit;
-        startVibration(55, 28);
-        drawCurrentPage();
-        activeGesture = DashboardGesture::none;
-        touchPending = false;
-        return;
-      }
-      if (target == DashboardClockTouchTarget::results) {
-        selectedResult = -1;
-        overlayMode = OverlayMode::results;
-        startVibration(55, 28);
-        drawCurrentPage();
-        activeGesture = DashboardGesture::none;
-        touchPending = false;
-        return;
-      }
-    }
     if (currentPage == 5) {
       DashboardFeatureTouchTarget target =
           dashboardFeatureTouchTarget(designX, designY, false);
@@ -5538,9 +5623,25 @@ void updateTouchInteraction(const m5::touch_detail_t &touch) {
   }
 
   if (touchPending && activeGesture == DashboardGesture::none) {
+    int gestureThreshold = kGestureLockThreshold;
+    if (currentPage == 0) {
+      int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
+      int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
+      if (dashboardClockTouchTarget(designX, designY) !=
+          DashboardClockTouchTarget::none) {
+        gestureThreshold = kClockActionTapSlop + 1;
+      }
+    } else if (currentPage == 1) {
+      int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
+      int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
+      if (dashboardFocusTouchTarget(designX, designY) !=
+          DashboardFocusTouchTarget::none) {
+        gestureThreshold = kFocusActionTapSlop + 1;
+      }
+    }
     activeGesture = classifyDashboardGesture(
         touch.distanceX(), touch.distanceY(), touch.base_x, M5.Display.width(),
-        kGestureLockThreshold);
+        gestureThreshold);
   }
   if (activeGesture == DashboardGesture::brightness ||
       activeGesture == DashboardGesture::volume) {
@@ -6257,6 +6358,9 @@ void setup() {
   clockSecondCanvas.setColorDepth(16);
   clockSecondCanvasReady =
       clockSecondCanvas.createSprite(kClockSecondPatchWidth, kClockSecondPatchHeight) != nullptr;
+  focusHeroCanvas.setColorDepth(16);
+  focusHeroCanvasReady =
+      focusHeroCanvas.createSprite(kFocusHeroPatchWidth, kFocusHeroPatchHeight) != nullptr;
   aiHotspotBurstCanvas.setColorDepth(16);
   aiHotspotBurstCanvasReady =
       aiHotspotBurstCanvas.createSprite(220, 220) != nullptr;
@@ -6319,7 +6423,13 @@ void loop() {
   updateVoiceAudio();
   updateAudioPowerGuard();
   updateDevicePower();
-  if (usbAudioStreaming) requireHighPerformance();
+  bool focusTimerNeedsRealtimeCpu =
+      !screenLocked && appMode == DashboardAppMode::dashboard &&
+      currentPage == 1 && overlayMode == OverlayMode::none &&
+      !completionAnimationRunning &&
+      (timerRunning(ticktick.stopwatchState) ||
+       timerRunning(ticktick.countdownState));
+  if (usbAudioStreaming || focusTimerNeedsRealtimeCpu) requireHighPerformance();
   updateCpuPolicy();
   updateHttpOta();
   if (screenLocked) {
@@ -6482,6 +6592,11 @@ void loop() {
     // the complete Clock once before its seconds-only patch is allowed to run.
     drawCurrentPage();
   }
+  if (focusPageNeedsFullRedraw && haveData &&
+      appMode == DashboardAppMode::dashboard && currentPage == 1 &&
+      overlayMode == OverlayMode::none && !completionAnimationRunning) {
+    drawCurrentPage();
+  }
   markProviderLoopDiagnostic(631);
   connectWifi();
   markProviderLoopDiagnostic(632);
@@ -6514,11 +6629,11 @@ void loop() {
       }
     }
   }
-  if (haveData && currentPage == 1 &&
+  if (haveData && appMode == DashboardAppMode::dashboard && currentPage == 1 &&
+      overlayMode == OverlayMode::none && !completionAnimationRunning &&
       (timerRunning(ticktick.stopwatchState) || timerRunning(ticktick.countdownState)) &&
       tickSecond != lastTickTickDrawSecond) {
-    lastTickTickDrawSecond = tickSecond;
-    drawCurrentPage();
+    drawFocusHeroTimeOnly();
   }
 
   if (millis() - lastFetchAt >= dashboardStateRefreshInterval() &&
@@ -6535,6 +6650,14 @@ void loop() {
         hadDataBeforeFetch && haveData &&
         appMode == DashboardAppMode::dashboard && currentPage == 0 &&
         overlayMode == OverlayMode::none && !completionAnimationRunning;
+    bool deferRunningFocusStateRedraw =
+        hadDataBeforeFetch && haveData &&
+        appMode == DashboardAppMode::dashboard && currentPage == 1 &&
+        overlayMode == OverlayMode::none && !completionAnimationRunning &&
+        !focusPageNeedsFullRedraw &&
+        (timerRunning(ticktick.stopwatchState) ||
+         timerRunning(ticktick.countdownState));
+    if (deferRunningFocusStateRedraw) deferClockStateRedraw = true;
     if (!deferClockStateRedraw) drawCurrentPage();
   }
   markProviderLoopDiagnostic(699);

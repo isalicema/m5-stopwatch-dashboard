@@ -8,6 +8,7 @@ import json
 import os
 import plistlib
 import secrets
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -40,6 +41,7 @@ def paths() -> Dict[str, Path]:
         "audio_helper": target / "bin/m5_audio_input",
         "codex_notify_helper": target / "bin/M5CodexNotify",
         "claude_notify_helper": target / "bin/M5ClaudeNotify",
+        "claude_stop_fanout_helper": target / "bin/M5ClaudeStopFanout",
         "typeless_helper": target / "TypelessKeySender.app/Contents/MacOS/TypelessKeySender",
         "typeless_helper_info": target / "TypelessKeySender.app/Contents/Info.plist",
     }
@@ -73,6 +75,15 @@ def copy_app(p: Dict[str, Path]) -> None:
         claude_notify_target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(claude_notify_source, claude_notify_target)
         claude_notify_target.chmod(0o755)
+    claude_fanout_source = p["project"] / "mac/M5ClaudeStopFanout.sh"
+    if claude_fanout_source.is_file():
+        claude_fanout_target = (
+            p.get("claude_stop_fanout_helper")
+            or p["target"] / "bin/M5ClaudeStopFanout"
+        )
+        claude_fanout_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(claude_fanout_source, claude_fanout_target)
+        claude_fanout_target.chmod(0o755)
     source_config = p["project"] / "config.json"
     # Never replace this Mac's working token/cloud settings with a config
     # synced from another location. Seed the config only on a fresh install.
@@ -121,6 +132,7 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
     codex.setdefault("transcript_refresh_seconds", 1)
     claude = config.setdefault("claude", {})
     claude["hook_state_path"] = str(p["target"] / "claude_hooks.json")
+    claude.setdefault("completion_source", "jsonl")
     example_source = claude.get("source") if isinstance(claude.get("source"), dict) else {}
     if str(example_source.get("base_url") or "").startswith("http://IMAC-IP:"):
         claude.pop("source", None)
@@ -443,7 +455,7 @@ def install_hooks(p: Dict[str, Path]) -> None:
 
 
 def install_claude_completion_hook(p: Dict[str, Path]) -> None:
-    """Append M5 to Claude's existing Stop hook without replacing peon-ping."""
+    """Fan one authoritative Claude Stop payload out to peon-ping and M5."""
     copy_app(p)
     settings_file = p["claude_settings"]
     settings_file.parent.mkdir(parents=True, exist_ok=True)
@@ -458,22 +470,66 @@ def install_claude_completion_hook(p: Dict[str, Path]) -> None:
     hooks = config.setdefault("hooks", {})
     groups = hooks.setdefault("Stop", [])
     cleaned = []
+    peon_handler = None
+    peon_group_index = None
+    fallback_group_index = None
     for group in groups:
-        handlers = [handler for handler in group.get("hooks", []) if not _is_ours(handler)]
-        if handlers:
+        handlers = []
+        selected_peon_here = False
+        for handler in group.get("hooks", []):
+            command = str(handler.get("command") or "")
+            if "M5ClaudeStopFanout" in command:
+                try:
+                    fanout_parts = shlex.split(command)
+                except ValueError:
+                    fanout_parts = []
+                if peon_handler is None and len(fanout_parts) >= 3:
+                    peon_handler = dict(handler)
+                    peon_handler["command"] = fanout_parts[1]
+                    selected_peon_here = True
+                continue
+            if _is_ours(handler):
+                continue
+            if peon_handler is None and "peon-ping" in command:
+                peon_handler = dict(handler)
+                selected_peon_here = True
+                continue
+            handlers.append(handler)
+        if handlers or selected_peon_here:
             updated = dict(group)
             updated["hooks"] = handlers
             cleaned.append(updated)
+            if selected_peon_here:
+                peon_group_index = len(cleaned) - 1
+            if str(updated.get("matcher") or "") == "":
+                current_index = len(cleaned) - 1
+                if fallback_group_index is None:
+                    fallback_group_index = current_index
     command = str(p.get("claude_notify_helper") or p["target"] / "bin/M5ClaudeNotify")
-    cleaned.append(
-        {
-            "matcher": "",
-            "hooks": [{"type": "command", "command": command, "timeout": 2, "async": True}],
-        }
-    )
+    if peon_handler is not None and peon_group_index is not None:
+        fanout = str(
+            p.get("claude_stop_fanout_helper")
+            or p["target"] / "bin/M5ClaudeStopFanout"
+        )
+        fanout_handler = dict(peon_handler)
+        fanout_handler["command"] = " ".join(
+            shlex.quote(item)
+            for item in (fanout, str(peon_handler.get("command") or ""), command)
+        )
+        shared_group = dict(cleaned[peon_group_index])
+        shared_group["hooks"] = [fanout_handler] + list(shared_group["hooks"])
+        cleaned[peon_group_index] = shared_group
+    else:
+        handler = {"type": "command", "command": command, "timeout": 2, "async": True}
+        if fallback_group_index is None:
+            cleaned.append({"matcher": "", "hooks": [handler]})
+        else:
+            shared_group = dict(cleaned[fallback_group_index])
+            shared_group["hooks"] = [handler] + list(shared_group["hooks"])
+            cleaned[fallback_group_index] = shared_group
     hooks["Stop"] = cleaned
     settings_file.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print("Installed Claude Stop completion hook beside existing handlers: %s" % settings_file)
+    print("Installed Claude Stop fanout beside the existing sound hook: %s" % settings_file)
 
 
 def install_launch_agent(p: Dict[str, Path]) -> None:
@@ -790,7 +846,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Install the M5 Dashboard bridge integration")
     parser.add_argument(
         "--hooks", action="store_true",
-        help="install Codex status hooks and the Claude completion hook",
+        help="install Codex status hooks",
     )
     parser.add_argument(
         "--claude-hook", action="store_true",
@@ -839,8 +895,7 @@ def main() -> None:
         configure_peer_from_usage(p)
     if args.hooks or args.all:
         install_hooks(p)
-        install_claude_completion_hook(p)
-    elif args.claude_hook:
+    if args.claude_hook:
         install_claude_completion_hook(p)
     if args.launch_agent or args.all:
         install_launch_agent(p)

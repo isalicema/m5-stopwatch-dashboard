@@ -20,10 +20,13 @@ from bridge.ai_hotspots import (
 
 
 def feed(*titles: str) -> bytes:
+    published_at = dt.datetime.now(dt.timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S +0000"
+    )
     items = "".join(
         "<item><title>%s</title><link>https://example.com/%d</link>"
-        "<guid>%d</guid><pubDate>Fri, 21 Aug 2026 12:%02d:00 +0800</pubDate></item>"
-        % (title, index, index, index)
+        "<guid>%d</guid><pubDate>%s</pubDate></item>"
+        % (title, index, index, published_at)
         for index, title in enumerate(titles)
     )
     return ("<rss><channel>%s</channel></rss>" % items).encode("utf-8")

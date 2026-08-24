@@ -198,11 +198,23 @@ class QuotaRingTests(unittest.TestCase):
     def test_focus_touch_buttons_dispatch_the_current_timer_mode(self):
         touch = function_source(self.source, "void finishTouchGesture(")
         self.assertIn("dashboardFocusTouchTarget(designX, designY)", touch)
+        self.assertIn("dashboardFocusTapAccepted", touch)
+        self.assertIn("if (focusShortcutTap)", touch)
         self.assertIn('"stopwatch-click"', touch)
         self.assertIn('"countdown-click"', touch)
         self.assertIn('"stopwatch-end"', touch)
         self.assertIn('"countdown-end"', touch)
         self.assertIn("performTickTickAction(action)", touch)
+
+    def test_focus_touch_uses_the_measured_round_screen_lower_edge(self):
+        interaction = (PROJECT / "firmware/M5Dashboard/interaction_logic.h").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "constexpr int kFocusActionLowerEdgeCompensation = 32;", interaction
+        )
+        self.assertIn("constexpr int kFocusActionTapSlop = 34;", interaction)
+        self.assertIn("gestureThreshold = kFocusActionTapSlop + 1;", self.source)
 
     def test_focus_actions_update_the_visible_timer_before_bridge_confirmation(self):
         optimistic = function_source(self.source, "void applyOptimisticTickTickAction(")
@@ -215,6 +227,24 @@ class QuotaRingTests(unittest.TestCase):
         self.assertLess(
             action.index("applyOptimisticTickTickAction(action);"),
             action.index("sendUsbDashboardAction(action);"),
+        )
+
+    def test_running_focus_timer_preserves_its_anchor_and_uses_a_partial_patch(self):
+        apply_state = function_source(self.source, "bool applyDashboardState(")
+        self.assertIn("dashboardTimerPreserveRunningAnchor", apply_state)
+        self.assertIn("oldTickTick.syncedAt", apply_state)
+
+        partial = function_source(self.source, "void drawFocusHeroTimeOnly(")
+        self.assertIn("focusHeroCanvas.fillSprite(background)", partial)
+        self.assertIn("focusHeroCanvas.pushSprite", partial)
+
+        loop = function_source(self.source, "void loop(")
+        self.assertIn("drawFocusHeroTimeOnly();", loop)
+        self.assertIn("deferRunningFocusStateRedraw", loop)
+        self.assertIn("focusTimerNeedsRealtimeCpu", loop)
+        self.assertIn(
+            "if (usbAudioStreaming || focusTimerNeedsRealtimeCpu) requireHighPerformance();",
+            loop,
         )
 
 

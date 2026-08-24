@@ -74,6 +74,21 @@ Dashboard 本体可以独立安装，但不同屏幕的数据来自不同的本�
 `AI--`，Claude 的 Token/额度增强字段不可用。若不打算安装，可在本机 `config.json` 中将
 `ai_usage.enabled` 设为 `false`，不会影响时钟、专注、Typeless、热点或 Obsidian。
 
+## 两条完成动画路线
+
+Codex 与 Claude Code 的完成动画刻意采用两条独立路线，不把普通工具调用或 thinking
+误判成任务完成：
+
+- **Codex** 搭载产品自身的 `notify` / `agent-turn-complete` 终态通知。它可以与 peon-ping
+  等音效共用同一个回调，因此声音与手表动画几乎同时抵达。
+- **Claude Code** 默认由 Bridge 轻量读取 `~/.claude/projects` 会话 JSONL。只有带可见最终
+  回复的 `end_turn` 才生成完成动画；`tool_use`、`pause_turn`、`max_tokens` 和仅有 thinking
+  的 `end_turn` 都继续视为工作中。
+
+两条路线都只向手表发送完成时间和默认匿名任务标识；任务标题与对话预览仍需在本机配置中
+显式开启。Claude 不要求安装 peon-ping，也不依赖它是否成功播放音效。详细安装与旧式 Hook
+兼容方式见 [Bridge 说明](m5-dashboard/README.md#3-安装-codex-hook-与常驻服务)。
+
 ## 安全与隐私
 
 - 公开示例默认关闭任务标题和对话预览。

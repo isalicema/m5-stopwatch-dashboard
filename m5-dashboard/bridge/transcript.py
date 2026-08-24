@@ -90,6 +90,7 @@ class _TranscriptTracker:
             "status": "unknown",
             "last_event": modified,
             "completed_at": 0.0,
+            "last_completion_at": 0.0,
             "modified": modified,
             "messages": [],
             "message_indexes": {},
@@ -221,8 +222,10 @@ class _TranscriptTracker:
             self._advance(path)
         completed = []
         for index, state in enumerate(self._states.values(), 1):
-            stamp = float(state.get("completed_at") or 0)
-            if state.get("status") != "idle" or stamp < day_start:
+            stamp = float(
+                state.get("last_completion_at") or state.get("completed_at") or 0
+            )
+            if stamp < day_start:
                 continue
             title = _clean_text(state.get("title")) or self._fallback_title(state, index)
             completed.append(
@@ -252,7 +255,14 @@ class LocalCodexTranscripts(_TranscriptTracker):
         if kind == "task_started":
             state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
         elif kind == "task_complete":
-            state.update({"status": "idle", "last_event": stamp, "completed_at": stamp})
+            state.update(
+                {
+                    "status": "idle",
+                    "last_event": stamp,
+                    "completed_at": stamp,
+                    "last_completion_at": stamp,
+                }
+            )
         elif kind == "user_message":
             state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
             key = str(payload.get("client_id") or "user-%d" % int(stamp * 1000))
@@ -305,7 +315,14 @@ class LocalClaudeTranscripts(_TranscriptTracker):
         if stop_reason == "end_turn" and text:
             # Claude can emit a thinking-only end_turn before its visible final
             # response. Only the visible response is a user-facing completion.
-            state.update({"status": "idle", "last_event": stamp, "completed_at": stamp})
+            state.update(
+                {
+                    "status": "idle",
+                    "last_event": stamp,
+                    "completed_at": stamp,
+                    "last_completion_at": stamp,
+                }
+            )
         elif stop_reason in {"tool_use", "pause_turn", "max_tokens"}:
             state.update({"status": "working", "last_event": stamp, "completed_at": 0.0})
 

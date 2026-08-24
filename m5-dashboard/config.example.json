@@ -132,6 +132,7 @@
   "claude": {
     "hook_state_path": "~/Library/Application Support/M5Dashboard/claude_hooks.json",
     "enabled": true,
+    "completion_source": "jsonl",
     "local_only": true,
     "refresh_seconds": 60,
     "activity_refresh_seconds": 3,

@@ -309,9 +309,10 @@ def main(argv: Optional[list[str]] = None) -> None:
         monitor = ClaudeMonitor(claude_config, dashboard.set_claude)
         monitor.start()
         workers.append(monitor)
-        completion_callbacks["claude"] = lambda payload, current=monitor: completed(
-            "claude", current, payload
-        )
+        if str(claude_config.get("completion_source") or "jsonl").strip().lower() == "hook":
+            completion_callbacks["claude"] = lambda payload, current=monitor: completed(
+                "claude", current, payload
+            )
     if weather_config.get("enabled", True):
         monitor = WeatherMonitor(weather_config, dashboard.set_weather)
         monitor.start()

@@ -9,6 +9,7 @@ from unittest import mock
 from bridge.claude_client import (
     ClaudeMonitor,
     hook_completion_results,
+    jsonl_completion_results,
     local_claude_state,
     normalize_claude_stats,
 )
@@ -16,6 +17,26 @@ from bridge.claude_hook import notify_bridge
 
 
 class ClaudeUsageTests(unittest.TestCase):
+    def test_jsonl_visible_end_turn_is_the_default_completion_source(self):
+        candidates = [
+            {"id": "session-12345678", "title": "真实完成的 Claude 任务", "completed_at": 123}
+        ]
+        visible = jsonl_completion_results(candidates, True)
+        hidden = jsonl_completion_results(candidates, False)
+
+        self.assertEqual(
+            visible[0],
+            {
+                "id": "12345678",
+                "title": "真实完成的 Claude 任务",
+                "completed_at": 123,
+            },
+        )
+        self.assertEqual(hidden[0]["title"], "Claude 1")
+
+        monitor = ClaudeMonitor({}, lambda _: None)
+        self.assertEqual(monitor._completion_results(candidates, False), hidden)
+
     def test_completion_wake_interrupts_poll_delay(self):
         monitor = ClaudeMonitor({}, lambda _: None)
         self.assertEqual(monitor.wake(), {"provider": "claude", "woken": True})

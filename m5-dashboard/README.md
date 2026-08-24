@@ -139,10 +139,12 @@ Codex 的完成动画只应绑定产品级 `notify` 发出的 `agent-turn-comple
 这样音效和手表动画共享 Codex 自己的同一次 `turn-ended` 回调，同时任一辅助程序失败都不应
 阻断 Codex。未配置产品级 `notify` 时，旧式 Hooks 仍可提供活动状态，但不会猜测完成动画。
 
-Claude 完成动画采用同一原则：`--hooks` 会在现有 Claude Code `Stop` Hook 旁追加
-`M5ClaudeNotify`，不会替换 peon-ping。对话 JSONL 仍负责活动与可选标题显示，但其中的
-`end_turn` 不再直接触发动画；只有 Claude Code 真正发出 `Stop` 时才会出现完成反馈。
-只补装这一个锚点时可运行 `python3 scripts/install.py --claude-hook`。
+Claude 默认不依赖 peon-ping 或 Stop Hook。Bridge 轻量轮询 `~/.claude/projects` 中的会话
+JSONL：`tool_use`、`pause_turn` 和 `max_tokens` 仍视为工作中，thinking-only 的 `end_turn`
+也不会触发；只有同时带有可见最终回复的 `end_turn` 才会生成完成动画。标题是否共享仍受
+`expose_transcript` 控制，完成判断本身不需要公开正文。peon-ping 可继续独立播放音效，
+其成功或失败不会影响手表动画。仅在明确需要旧式 Stop Hook 时，才把
+`claude.completion_source` 设置为 `hook` 并运行 `python3 scripts/install.py --claude-hook`。
 
 完成 Hook 会先通过带 Dashboard Token 的本机 HTTP 接口原子合并一条无正文凭据，再向已认证
 的手表发送不含 Token、标题或对话的 UDP 状态变化信标；USB 在线时还会直接推送一次新快照。

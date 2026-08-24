@@ -204,6 +204,50 @@ class TranscriptTests(unittest.TestCase):
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0]["completed_at"], int(now.timestamp()))
 
+    def test_claude_completion_survives_the_next_prompt_for_polling(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "project" / "session.jsonl"
+            rows = [
+                {
+                    "timestamp": now.isoformat(),
+                    "type": "user",
+                    "sessionId": "claude-87654321",
+                    "message": {"content": "完成第一轮"},
+                },
+                {
+                    "timestamp": now.isoformat(),
+                    "type": "assistant",
+                    "message": {
+                        "id": "final-1",
+                        "content": [{"type": "text", "text": "第一轮已完成。"}],
+                        "stop_reason": "end_turn",
+                    },
+                },
+                {
+                    "timestamp": now.isoformat(),
+                    "type": "user",
+                    "sessionId": "claude-87654321",
+                    "message": {"content": "继续第二轮"},
+                },
+                {
+                    "timestamp": now.isoformat(),
+                    "type": "assistant",
+                    "message": {
+                        "id": "tool-2",
+                        "content": [{"type": "text", "text": "正在处理。"}],
+                        "stop_reason": "tool_use",
+                    },
+                },
+            ]
+            self._write(path, rows)
+            tracker = LocalClaudeTranscripts(root, stale_seconds=300)
+
+            self.assertEqual(len(tracker.snapshots(True)), 1)
+            results = tracker.completed_today(True)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["completed_at"], int(now.timestamp()))
+
     def test_codex_completion_timestamp_ignores_later_file_metadata(self):
         completed = datetime.now(timezone.utc).replace(microsecond=0)
         with tempfile.TemporaryDirectory() as root:

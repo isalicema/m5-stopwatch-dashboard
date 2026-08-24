@@ -57,6 +57,30 @@ def hook_completion_results(
     return output[: max(0, int(limit))]
 
 
+def jsonl_completion_results(
+    transcript_candidates: list[Dict[str, Any]],
+    expose_titles: bool,
+    limit: int = 6,
+) -> list[Dict[str, Any]]:
+    """Use Claude's visible final end_turn records as durable completions."""
+    output = []
+    for index, candidate in enumerate(transcript_candidates, 1):
+        session_id = str(candidate.get("id") or "")[-8:]
+        completed_at = _nonnegative_int(candidate.get("completed_at"))
+        if not session_id or completed_at <= 0:
+            continue
+        title = str(candidate.get("title") or "") if expose_titles else ""
+        output.append(
+            {
+                "id": session_id,
+                "title": title or "Claude %d" % index,
+                "completed_at": completed_at,
+            }
+        )
+    output.sort(key=lambda item: int(item["completed_at"]), reverse=True)
+    return output[: max(0, int(limit))]
+
+
 def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
@@ -228,6 +252,18 @@ class ClaudeMonitor(threading.Thread):
         self._wake_event.wait(seconds)
         self._wake_event.clear()
 
+    def _completion_results(
+        self, candidates: list[Dict[str, Any]], expose_titles: bool
+    ) -> list[Dict[str, Any]]:
+        source = str(self.config.get("completion_source") or "jsonl").strip().lower()
+        if source == "hook":
+            return hook_completion_results(
+                load_hook_sessions(str(self.config.get("hook_state_path") or "")),
+                candidates,
+                expose_titles,
+            )
+        return jsonl_completion_results(candidates, expose_titles)
+
     def run(self) -> None:
         refresh_seconds = max(15, int(self.config.get("refresh_seconds", 60)))
         activity_refresh_seconds = max(
@@ -259,8 +295,7 @@ class ClaudeMonitor(threading.Thread):
                                 _nonnegative_int(failed.get("active_count")), len(transcripts)
                             ),
                             "transcripts": transcripts,
-                            "results": hook_completion_results(
-                                load_hook_sessions(str(self.config.get("hook_state_path") or "")),
+                            "results": self._completion_results(
                                 title_candidates,
                                 bool(self.config.get("expose_transcript", False)),
                             ),
@@ -283,8 +318,7 @@ class ClaudeMonitor(threading.Thread):
                     len(transcripts),
                 )
                 current["transcripts"] = transcripts
-                current["results"] = hook_completion_results(
-                    load_hook_sessions(str(self.config.get("hook_state_path") or "")),
+                current["results"] = self._completion_results(
                     title_candidates,
                     bool(self.config.get("expose_transcript", False)),
                 )

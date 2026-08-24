@@ -79,8 +79,24 @@ int main() {
          DashboardFocusTouchTarget::primary);
   assert(dashboardFocusTouchTarget(320, 370) ==
          DashboardFocusTouchTarget::end);
+  assert(dashboardFocusTouchTarget(180, 425) ==
+         DashboardFocusTouchTarget::primary);
+  assert(dashboardFocusTouchTarget(320, 425) ==
+         DashboardFocusTouchTarget::end);
+  assert(dashboardFocusTouchTarget(320, 435) ==
+         DashboardFocusTouchTarget::end);
+  assert(dashboardFocusTouchTarget(320, 436) ==
+         DashboardFocusTouchTarget::none);
   assert(dashboardFocusTouchTarget(225, 330) == DashboardFocusTouchTarget::none);
   assert(dashboardFocusTouchTarget(90, 390) == DashboardFocusTouchTarget::none);
+  assert(dashboardFocusTapAccepted(30, -22));
+  assert(dashboardFocusTapAccepted(-34, 34));
+  assert(!dashboardFocusTapAccepted(35, 0));
+  assert(dashboardTimerPreserveRunningAnchor(true, true, 68, 71));
+  assert(dashboardTimerPreserveRunningAnchor(true, true, 71, 68));
+  assert(!dashboardTimerPreserveRunningAnchor(true, true, 68, 72));
+  assert(!dashboardTimerPreserveRunningAnchor(false, true, 68, 68));
+  assert(!dashboardTimerPreserveRunningAnchor(true, false, 68, 68));
 
   assert(dashboardRectInsideCircle(kEditorialHeaderX, kEditorialHeaderBoundsY,
                                    kEditorialHeaderBoundsWidth,
@@ -103,10 +119,24 @@ int main() {
          DashboardClockTouchTarget::none);
   assert(dashboardClockTouchTarget(300, 324) ==
          DashboardClockTouchTarget::none);
-  assert(dashboardClockTouchTarget(150, 339) ==
+  assert(dashboardClockTouchTarget(150, 335) ==
+         DashboardClockTouchTarget::none);
+  assert(dashboardClockTouchTarget(150, 336) ==
+         DashboardClockTouchTarget::orbit);
+  assert(dashboardClockTouchTarget(155, 420) ==
+         DashboardClockTouchTarget::orbit);
+  assert(dashboardClockTouchTarget(335, 425) ==
+         DashboardClockTouchTarget::results);
+  assert(dashboardClockTouchTarget(300, 431) ==
+         DashboardClockTouchTarget::results);
+  assert(dashboardClockTouchTarget(300, 432) ==
          DashboardClockTouchTarget::none);
   assert(dashboardClockTouchTarget(225, 320) ==
          DashboardClockTouchTarget::none);
+  assert(dashboardClockTapAccepted(30, -22));
+  assert(dashboardClockTapAccepted(-34, 34));
+  assert(!dashboardClockTapAccepted(35, 0));
+  assert(!dashboardClockTapAccepted(0, -35));
   assert(dashboardRectInsideCircle(kProviderIconX - kProviderIconTouchExpansion,
                                    kProviderIconY - kProviderIconTouchExpansion,
                                    kProviderIconSize + 2 * kProviderIconTouchExpansion,
