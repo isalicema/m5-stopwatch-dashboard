@@ -1059,6 +1059,70 @@ bool pulseVibrationBlocking(uint8_t strength, uint16_t durationMs) {
   return stopped;
 }
 
+void drawPowerTransitionFrame(bool starting, int percent) {
+  const uint16_t background = rgb(0, 0, 0);
+  const uint16_t mint = rgb(63, 226, 174);
+  const uint16_t muted = rgb(115, 128, 124);
+  int radius = dashboardPowerTransitionRadius(starting, percent);
+
+  editorialFrameAccentActive = false;
+  editorialFrameBurstActive = false;
+  canvas.fillScreen(background);
+  canvas.fillSmoothCircle(225, 204, radius, mint);
+  if (radius > 9) canvas.fillSmoothCircle(225, 204, radius - 8, background);
+
+  if (starting && percent >= 24) {
+    constexpr int markSize = 10;
+    constexpr int markGap = 5;
+    for (int row = 0; row < 2; ++row) {
+      for (int column = 0; column < 2; ++column) {
+        int x = 225 + (column == 0 ? -markSize - markGap / 2 : markGap / 2);
+        int y = 204 + (row == 0 ? -markSize - markGap / 2 : markGap / 2);
+        canvas.fillSmoothRoundRect(x, y, markSize, markSize, 3, mint);
+      }
+    }
+  }
+
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(mint);
+  useEditorialBold24();
+  canvas.drawString(starting ? "M5 DASHBOARD" : "POWER OFF", 225, 292);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  canvas.drawString(starting ? "STARTING" : "SHUTTING DOWN", 225, 324);
+
+  constexpr int trackWidth = 104;
+  int filledWidth = starting ? trackWidth * percent / 100
+                             : trackWidth * (100 - percent) / 100;
+  canvas.fillSmoothRoundRect(173, 350, trackWidth, 4, 2, rgb(30, 45, 41));
+  if (filledWidth > 0) {
+    canvas.fillSmoothRoundRect(173, 350, filledWidth, 4, 2, mint);
+  }
+  composeRenderedFrame(background);
+  pushRenderedFrame(background);
+}
+
+void playBootTransition() {
+  pulseVibrationBlocking(52, 28);
+  for (int frame = 0; frame <= 14; ++frame) {
+    drawPowerTransitionFrame(true, frame * 100 / 14);
+    delay(34);
+  }
+  delay(130);
+}
+
+void playPowerOffTransition() {
+  drawPowerTransitionFrame(false, 0);
+  pulseVibrationBlocking(135, 75);
+  delay(50);
+  pulseVibrationBlocking(190, 115);
+  for (int frame = 1; frame <= 18; ++frame) {
+    drawPowerTransitionFrame(false, frame * 100 / 18);
+    delay(45);
+  }
+  delay(220);
+}
+
 void startCompletionAnimation(char provider, const String &source, size_t count) {
   if (screenLocked || configMode) return;
   uint32_t now = millis();
@@ -1208,6 +1272,12 @@ void setScreenLocked(bool locked) {
     completionBaselineReady = false;
     activeGesture = DashboardGesture::none;
     touchPending = false;
+    pulseVibrationBlocking(38, 18);
+    uint8_t fullBrightness = static_cast<uint8_t>(brightnessPercent * 255 / 100);
+    M5.Display.setBrightness(static_cast<uint8_t>(fullBrightness * 2 / 3));
+    delay(18);
+    M5.Display.setBrightness(static_cast<uint8_t>(fullBrightness / 3));
+    delay(18);
     disableBottomLed();
     M5.Display.setBrightness(0);
     M5.Display.waitDisplay();
@@ -1248,8 +1318,21 @@ void updatePowerButton() {
     if (screenLocked) setScreenLocked(false);
     enterAppLauncher();
   } else if (action == DashboardPowerAction::powerOff) {
-    if (!screenLocked) setScreenLocked(true);
+    stopVoiceForStandby();
+    stopTonePattern();
+    disableSpeakerOutput();
+    completionAnimationRunning = false;
+    completionBaselineReady = false;
+    activeGesture = DashboardGesture::none;
+    touchPending = false;
+    playPowerOffTransition();
+    screenLocked = true;
     disableBottomLed();
+    stopVibration();
+    M5.Display.setBrightness(0);
+    M5.Display.waitDisplay();
+    setAmoledHardwareSleep(true);
+    M5.getIOExpander(0).digitalWrite(kTouchResetIoExpanderPin, false);
     M5.Power.powerOff();
   }
 }
@@ -5468,7 +5551,7 @@ void finishTouchGesture(const m5::touch_detail_t &touch) {
   } else if (ordinaryTap || featureTap) {
     if (currentPage == 5) {
       DashboardFeatureTouchTarget target =
-          dashboardFeatureTouchTarget(designX, designY, false);
+          dashboardAIHotspotTouchTarget(designX, designY);
       if (aiHotspot.active && target != DashboardFeatureTouchTarget::none) {
         activeGesture = DashboardGesture::none;
         touchPending = false;
@@ -5708,8 +5791,11 @@ void updateTouchInteraction(const m5::touch_detail_t &touch) {
     } else if (currentPage == 5 || currentPage == 6) {
       int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
       int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
-      if (dashboardFeatureTouchTarget(designX, designY, currentPage == 6) !=
-          DashboardFeatureTouchTarget::none) {
+      DashboardFeatureTouchTarget target =
+          currentPage == 5
+              ? dashboardAIHotspotTouchTarget(designX, designY)
+              : dashboardFeatureTouchTarget(designX, designY, true);
+      if (target != DashboardFeatureTouchTarget::none) {
         // Keep a fingertip armed while it settles on the lower capsule. Without
         // this page-specific threshold, a small vertical drift is classified as
         // brightness/volume before release and the action never receives its tap.
@@ -6451,6 +6537,7 @@ void setup() {
   transitionCanvas.setColorDepth(16);
   transitionCanvasReady =
       transitionCanvas.createSprite(kUiFrameSize, kUiFrameSize) != nullptr;
+  playBootTransition();
   lastHighPerformanceAt = millis();
   updateDevicePower(true);
 

@@ -283,6 +283,12 @@ int main() {
   assert(dashboardCenteredOffset(468, 466) == 1);
   assert(dashboardCenteredOffset(450, 450) == 0);
   assert(dashboardCenteredOffset(320, 450) == 0);
+  assert(dashboardPowerTransitionRadius(true, 0) == 12);
+  assert(dashboardPowerTransitionRadius(true, 100) == 66);
+  assert(dashboardPowerTransitionRadius(false, 0) == 66);
+  assert(dashboardPowerTransitionRadius(false, 100) == 10);
+  assert(dashboardPowerTransitionRadius(true, 140) == 66);
+  assert(dashboardPowerTransitionRadius(false, -20) == 66);
 
   assert(nextConfiguredWifiProfile(-1, true, true) == 0);
   assert(nextConfiguredWifiProfile(0, true, true) == 1);
@@ -326,6 +332,20 @@ int main() {
   assert(dashboardFeatureTouchTarget(120, 439, false) ==
          DashboardFeatureTouchTarget::primary);
   assert(dashboardFeatureTouchTarget(120, 440, false) ==
+         DashboardFeatureTouchTarget::none);
+  assert(dashboardAIHotspotTouchTarget(80, 360) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardAIHotspotTouchTarget(277, 360) ==
+         DashboardFeatureTouchTarget::primary);
+  assert(dashboardAIHotspotTouchTarget(278, 360) ==
+         DashboardFeatureTouchTarget::secondary);
+  assert(dashboardAIHotspotTouchTarget(378, 350) ==
+         DashboardFeatureTouchTarget::secondary);
+  assert(dashboardAIHotspotTouchTarget(225, 317) ==
+         DashboardFeatureTouchTarget::none);
+  assert(dashboardAIHotspotTouchTarget(390, 350) ==
+         DashboardFeatureTouchTarget::none);
+  assert(dashboardAIHotspotTouchTarget(378, 420) ==
          DashboardFeatureTouchTarget::none);
   assert(dashboardFeatureTapAccepted(DashboardGesture::none, 17, 17));
   assert(dashboardFeatureTapAccepted(DashboardGesture::none, 0, 32));

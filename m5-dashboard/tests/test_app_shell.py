@@ -52,6 +52,27 @@ class AppShellTests(unittest.TestCase):
             normalized_logic,
         )
 
+    def test_standby_and_true_power_cycles_have_distinct_feedback(self):
+        self.assertIn("void playBootTransition()", self.source)
+        self.assertIn("void playPowerOffTransition()", self.source)
+        self.assertIn('starting ? "M5 DASHBOARD" : "POWER OFF"', self.source)
+        self.assertIn('starting ? "STARTING" : "SHUTTING DOWN"', self.source)
+        self.assertIn("pulseVibrationBlocking(38, 18);", self.source)
+        self.assertIn("pulseVibrationBlocking(135, 75);", self.source)
+        self.assertIn("pulseVibrationBlocking(190, 115);", self.source)
+        self.assertIn("for (int frame = 1; frame <= 18; ++frame)", self.source)
+        power_off = self.source.split(
+            "action == DashboardPowerAction::powerOff", 1
+        )[1].split("void updateDevicePower", 1)[0]
+        self.assertLess(
+            power_off.index("disableSpeakerOutput();"),
+            power_off.index("playPowerOffTransition();"),
+        )
+        self.assertLess(
+            power_off.index("playPowerOffTransition();"),
+            power_off.index("M5.Power.powerOff();"),
+        )
+
     def test_boot_reenables_the_stopwatch_battery_charger(self):
         setup = self.source.split("void setup()", 1)[1].split("void loop()", 1)[0]
         self.assertIn("M5.begin(config);", setup)

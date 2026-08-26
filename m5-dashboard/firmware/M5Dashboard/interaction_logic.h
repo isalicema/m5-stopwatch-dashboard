@@ -118,6 +118,14 @@ constexpr int kFeatureActionTouchHeight = 78;
 // reachable without moving the artwork or stealing the content row above it.
 constexpr int kFeatureActionLowerEdgeCompensation = 32;
 constexpr int kFeatureActionTapSlop = 32;
+// The AI alert page pairs a wide acknowledgement capsule with a very short
+// "open" capsule near the curved right edge. Keep the artwork unchanged, but
+// give both actions a fingertip-sized target across the full safe footer row.
+constexpr int kAIHotspotActionTouchX = 70;
+constexpr int kAIHotspotActionTouchY = 318;
+constexpr int kAIHotspotActionTouchRight = 390;
+constexpr int kAIHotspotActionTouchBottom = 440;
+constexpr int kAIHotspotActionDividerX = 278;
 constexpr int kFeatureHeroTouchX = 230;
 constexpr int kFeatureHeroTouchY = 96;
 constexpr int kFeatureHeroTouchWidth = 176;
@@ -335,6 +343,17 @@ inline DashboardFeatureTouchTarget dashboardFeatureTouchTarget(int x, int y,
   return DashboardFeatureTouchTarget::none;
 }
 
+inline DashboardFeatureTouchTarget dashboardAIHotspotTouchTarget(int x, int y) {
+  if (x < kAIHotspotActionTouchX || x >= kAIHotspotActionTouchRight ||
+      y < kAIHotspotActionTouchY || y >= kAIHotspotActionTouchBottom ||
+      !dashboardPointInCircle(x, y, 225, 225, 225)) {
+    return DashboardFeatureTouchTarget::none;
+  }
+  return x < kAIHotspotActionDividerX
+             ? DashboardFeatureTouchTarget::primary
+             : DashboardFeatureTouchTarget::secondary;
+}
+
 inline bool dashboardFeatureTapAccepted(DashboardGesture gesture,
                                         int deltaX, int deltaY) {
   // The global 18 px gesture lock is intentionally crisp for page navigation,
@@ -532,6 +551,12 @@ inline bool usbReplyPending(uint32_t now, uint32_t lastRequestAt,
 
 inline int dashboardCenteredOffset(int displaySize, int designSize) {
   return displaySize > designSize ? (displaySize - designSize) / 2 : 0;
+}
+
+inline int dashboardPowerTransitionRadius(bool starting, int percent) {
+  int clamped = percent < 0 ? 0 : percent > 100 ? 100 : percent;
+  return starting ? 12 + clamped * 54 / 100
+                  : 66 - clamped * 56 / 100;
 }
 
 inline int nextConfiguredWifiProfile(int previousProfile, bool homeConfigured,
