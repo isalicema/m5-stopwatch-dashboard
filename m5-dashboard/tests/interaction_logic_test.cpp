@@ -27,6 +27,12 @@ int main() {
   assert(classifyDashboardGesture(9, -60, 100, 450, 18) ==
          DashboardGesture::brightness);
   assert(classifyDashboardGesture(9, 60, 350, 450, 18) == DashboardGesture::volume);
+  assert(classifyDashboardGesture(9, -60, 179, 450, 18) ==
+         DashboardGesture::brightness);
+  assert(classifyDashboardGesture(9, -60, 180, 450, 18) == DashboardGesture::none);
+  assert(classifyDashboardGesture(9, 60, 269, 450, 18) == DashboardGesture::none);
+  assert(classifyDashboardGesture(9, 60, 270, 450, 18) == DashboardGesture::volume);
+  assert(classifyDashboardGesture(-80, 12, 225, 450, 18) == DashboardGesture::page);
   assert(classifyDashboardGesture(30, 30, 100, 450, 18) == DashboardGesture::none);
 
   assert(adjustedDashboardPercent(50, -150, 10, 300, 5) == 100);

@@ -433,8 +433,13 @@ inline DashboardGesture classifyDashboardGesture(int deltaX, int deltaY, int sta
   if (absoluteX < threshold && absoluteY < threshold) return DashboardGesture::none;
   if (absoluteX * 4 >= absoluteY * 5) return DashboardGesture::page;
   if (absoluteY * 4 >= absoluteX * 5) {
-    return startX < displayWidth / 2 ? DashboardGesture::brightness
-                                     : DashboardGesture::volume;
+    // Keep vertical controls physically separated on the round display:
+    // left 2/5 adjusts brightness, the middle 1/5 is a safety gap, and
+    // right 2/5 adjusts notification volume. Horizontal page swipes remain
+    // available across the full display because they are classified above.
+    if (startX * 5 < displayWidth * 2) return DashboardGesture::brightness;
+    if (startX * 5 >= displayWidth * 3) return DashboardGesture::volume;
+    return DashboardGesture::none;
   }
   return DashboardGesture::none;
 }
