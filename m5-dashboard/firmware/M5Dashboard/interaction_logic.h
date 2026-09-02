@@ -119,8 +119,10 @@ constexpr int kFeatureActionTouchHeight = 78;
 constexpr int kFeatureActionLowerEdgeCompensation = 32;
 constexpr int kFeatureActionTapSlop = 32;
 // The AI alert page pairs a wide acknowledgement capsule with a very short
-// "open" capsule near the curved right edge. Keep the artwork unchanged, but
+// "open" capsule near the curved right edge.  Keep the artwork unchanged, but
 // give both actions a fingertip-sized target across the full safe footer row.
+// The visual gap remains the action divider, so the larger targets cannot make
+// "know" and "open" ambiguous.
 constexpr int kAIHotspotActionTouchX = 70;
 constexpr int kAIHotspotActionTouchY = 318;
 constexpr int kAIHotspotActionTouchRight = 390;
@@ -286,6 +288,20 @@ inline int dashboardAlignedRunningTimerBase(int remoteSeconds,
                     ? remoteSeconds + static_cast<int>(anchorAgeSeconds)
                     : remoteSeconds - static_cast<int>(anchorAgeSeconds);
   return aligned < 0 ? 0 : aligned;
+}
+
+inline int dashboardCompletionReplacementIndex(const int64_t *timestamps,
+                                               int count, int capacity,
+                                               int64_t candidateTimestamp) {
+  if (timestamps == nullptr || count < 0 || capacity <= 0 || count > capacity) {
+    return -1;
+  }
+  if (count < capacity) return count;
+  int oldestIndex = 0;
+  for (int index = 1; index < count; ++index) {
+    if (timestamps[index] < timestamps[oldestIndex]) oldestIndex = index;
+  }
+  return candidateTimestamp > timestamps[oldestIndex] ? oldestIndex : -1;
 }
 
 inline DashboardClockTouchTarget dashboardClockTouchTarget(int x, int y) {

@@ -229,8 +229,13 @@ DashboardAppMode appMode = DashboardAppMode::launcher;
 int launcherSelection = 0;
 LocalStopwatchModel localStopwatch;
 std::size_t localStopwatchLapOffset = 0;
+LocalCountdownModel localCountdown;
+LocalCountdownEditorModel localCountdownEditor;
+bool localCountdownWheelTracking = false;
+uint16_t localCountdownWheelStartMinutes = 8;
 bool shellBButtonWasPressed = false;
 uint32_t lastLocalStopwatchDrawAt = 0;
+uint64_t lastLocalCountdownDrawSecond = UINT64_MAX;
 constexpr uint16_t kDiscoveryPort = 8766;
 constexpr uint16_t kDiscoveryLocalPort = 42101;
 String activeBridgeHost;
@@ -430,6 +435,11 @@ struct ToneStep {
 };
 
 constexpr ToneStep kFocusDoneTones[] = {{880, 80, 35}, {1175, 140, 0}};
+// A two-second descending doorbell is deliberately unlike the AI-hotspot
+// scream's short four-step rise. The repeated high/low contour remains easy to
+// recognize in meetings, while the longer final low note avoids alarm fatigue.
+constexpr ToneStep kCountdownDoneTones[] = {
+    {988, 180, 60}, {659, 420, 320}, {988, 180, 60}, {659, 780, 0}};
 constexpr ToneStep kCodexWaitingTones[] = {{1047, 120, 0}};
 constexpr ToneStep kAiScreamTones[] = {
     {988, 70, 18}, {1319, 70, 18}, {1760, 180, 30}, {2093, 220, 0}};
@@ -563,6 +573,7 @@ void markProviderLoopDiagnostic(uint16_t stage) {
 
 void drawCurrentPage();
 void enterAppLauncher();
+void updateLocalCountdownTimer();
 bool readBButtonPressed();
 size_t visibleDashboardResultCount();
 void drawProvisioningPage(const String &apName, bool ready);
@@ -613,7 +624,10 @@ int displayFrameOffsetY() {
 }
 
 uint16_t currentRenderedBackground(uint32_t now) {
-  if (appMode == DashboardAppMode::stopwatch) return rgb(0, 0, 0);
+  if (appMode == DashboardAppMode::stopwatch ||
+      appMode == DashboardAppMode::countdownTimer) {
+    return rgb(0, 0, 0);
+  }
   if (appMode == DashboardAppMode::launcher) return editorialPaperColor();
   if (completionAnimationActive(now)) {
     DashboardCompletionAnimationFrame frame = dashboardCompletionAnimationFrame(
@@ -987,6 +1001,28 @@ void saveUiPreferences() {
   prefs.end();
 }
 
+void loadCountdownPreferences() {
+  Preferences prefs;
+  if (!prefs.begin("m5dash-timer", true)) return;
+  uint16_t presetA = prefs.getUShort("presetA", 8);
+  uint16_t presetB = prefs.getUShort("presetB", 10);
+  prefs.end();
+  if (localCountdownPresetValid(presetA)) {
+    localCountdown.presetMinutes[0] = presetA;
+  }
+  if (localCountdownPresetValid(presetB)) {
+    localCountdown.presetMinutes[1] = presetB;
+  }
+}
+
+void saveCountdownPreferences() {
+  Preferences prefs;
+  if (!prefs.begin("m5dash-timer", false)) return;
+  prefs.putUShort("presetA", localCountdown.presetMinutes[0]);
+  prefs.putUShort("presetB", localCountdown.presetMinutes[1]);
+  prefs.end();
+}
+
 void startVibration(uint8_t strength, uint16_t durationMs) {
   M5.Power.setVibration(strength);
   vibrationStopAt = millis() + durationMs;
@@ -1074,6 +1110,8 @@ void drawPowerTransitionFrame(bool starting, int percent) {
   canvas.fillSmoothCircle(225, 204, radius, mint);
   if (radius > 9) canvas.fillSmoothCircle(225, 204, radius - 8, background);
 
+  // This four-square mark belongs to a true application boot only. Waking
+  // from display standby skips the scene and restores the previous page.
   if (starting && percent >= 24) {
     constexpr int markSize = 10;
     constexpr int markGap = 5;
@@ -1115,6 +1153,9 @@ void playBootTransition() {
 }
 
 void playPowerOffTransition() {
+  // Put the closing scene on glass before any blocking tactile pulse. The
+  // first version spent most of its time vibrating an unchanged dashboard and
+  // left the actual animation visible for less than half a second.
   drawPowerTransitionFrame(false, 0);
   pulseVibrationBlocking(135, 75);
   delay(50);
@@ -1275,6 +1316,8 @@ void setScreenLocked(bool locked) {
     completionBaselineReady = false;
     activeGesture = DashboardGesture::none;
     touchPending = false;
+    // Standby is deliberately brief: a soft tactile tick and a fast fade. A
+    // true shutdown uses the separate branded closing scene below.
     pulseVibrationBlocking(38, 18);
     uint8_t fullBrightness = static_cast<uint8_t>(brightnessPercent * 255 / 100);
     M5.Display.setBrightness(static_cast<uint8_t>(fullBrightness * 2 / 3));
@@ -1323,6 +1366,8 @@ void updatePowerButton() {
   } else if (action == DashboardPowerAction::powerOff) {
     stopVoiceForStandby();
     stopTonePattern();
+    // Make the two following pulses unambiguously haptic. The codec and PA are
+    // forced off even when no tone pattern currently owns them.
     disableSpeakerOutput();
     completionAnimationRunning = false;
     completionBaselineReady = false;
@@ -3894,11 +3939,11 @@ void drawLocalStopwatchTimeOnly() {
   M5.Display.endWrite();
 }
 
-void drawLauncherIcon(bool dashboardIcon, int centerX, int centerY,
+void drawLauncherIcon(int iconIndex, int centerX, int centerY,
                       uint16_t color, uint16_t surface) {
-  if (dashboardIcon) {
-    constexpr int size = 23;
-    constexpr int gap = 10;
+  if (iconIndex == 0) {
+    constexpr int size = 18;
+    constexpr int gap = 8;
     for (int row = 0; row < 2; ++row) {
       for (int column = 0; column < 2; ++column) {
         int x = centerX + (column == 0 ? -size - gap / 2 : gap / 2);
@@ -3908,12 +3953,26 @@ void drawLauncherIcon(bool dashboardIcon, int centerX, int centerY,
     }
     return;
   }
-  canvas.drawCircle(centerX, centerY, 34, color);
-  canvas.drawCircle(centerX, centerY, 33, color);
-  canvas.drawLine(centerX, centerY, centerX, centerY - 20, color);
-  canvas.drawLine(centerX, centerY, centerX + 17, centerY + 10, color);
-  canvas.fillCircle(centerX, centerY, 4, surface);
-  canvas.fillCircle(centerX, centerY, 2, color);
+  if (iconIndex == 1) {
+    canvas.drawCircle(centerX, centerY, 27, color);
+    canvas.drawCircle(centerX, centerY, 26, color);
+    canvas.drawLine(centerX, centerY, centerX, centerY - 16, color);
+    canvas.drawLine(centerX, centerY, centerX + 13, centerY + 8, color);
+    canvas.fillCircle(centerX, centerY, 4, surface);
+    canvas.fillCircle(centerX, centerY, 2, color);
+    return;
+  }
+
+  // A spare, geometric hourglass keeps the third app visually related to the
+  // factory-style stopwatch without suggesting that it is another clock face.
+  canvas.drawLine(centerX - 22, centerY - 26, centerX + 22, centerY - 26, color);
+  canvas.drawLine(centerX - 22, centerY + 26, centerX + 22, centerY + 26, color);
+  canvas.drawLine(centerX - 18, centerY - 23, centerX + 18, centerY + 23, color);
+  canvas.drawLine(centerX + 18, centerY - 23, centerX - 18, centerY + 23, color);
+  canvas.fillTriangle(centerX - 13, centerY - 18, centerX + 13, centerY - 18,
+                      centerX, centerY - 3, color);
+  canvas.fillTriangle(centerX - 13, centerY + 18, centerX + 13, centerY + 18,
+                      centerX, centerY + 4, color);
 }
 
 void drawAppLauncherPage() {
@@ -3921,6 +3980,7 @@ void drawAppLauncherPage() {
   const uint16_t ink = rgb(5, 5, 5);
   const uint16_t coral = rgb(255, 59, 48);
   const uint16_t yellow = rgb(255, 196, 0);
+  const uint16_t mint = rgb(63, 226, 174);
   const uint16_t muted = rgb(106, 105, 101);
   canvas.fillScreen(background);
   canvas.fillCircle(366, 84, 126, coral);
@@ -3930,36 +3990,35 @@ void drawAppLauncherPage() {
   useChinese24();
   canvas.drawString("选择程序", 225, 78);
 
-  constexpr int centers[] = {137, 313};
-  for (int index = 0; index < 2; ++index) {
+  constexpr int centers[] = {85, 225, 365};
+  constexpr uint16_t radius = 56;
+  for (int index = 0; index < 3; ++index) {
     bool selected = launcherSelection == index;
     uint16_t surface = selected ? ink : background;
-    uint16_t accent = index == 0 ? coral : yellow;
-    canvas.fillCircle(centers[index], 222, 74, surface);
-    canvas.drawCircle(centers[index], 222, 74, accent);
-    canvas.drawCircle(centers[index], 222, 72, accent);
-    if (selected) canvas.drawCircle(centers[index], 222, 78, ink);
-    drawLauncherIcon(index == 0, centers[index], 212,
+    uint16_t accent = index == 0 ? coral : index == 1 ? yellow : mint;
+    canvas.fillCircle(centers[index], 218, radius, surface);
+    canvas.drawCircle(centers[index], 218, radius, accent);
+    canvas.drawCircle(centers[index], 218, radius - 2, accent);
+    if (selected) canvas.drawCircle(centers[index], 218, radius + 4, ink);
+    drawLauncherIcon(index, centers[index], 208,
                      selected ? background : ink, surface);
 
-    canvas.fillCircle(centers[index] - 45, 166, 14, accent);
     canvas.setTextColor(ink);
-    useNumberFont();
-    canvas.setTextSize(0.82f);
-    canvas.drawString(index == 0 ? "A" : "B", centers[index] - 45, 166);
+    canvas.setFont(&fonts::FreeSansBold9pt7b);
     canvas.setTextSize(1);
-
-    canvas.setTextColor(selected ? background : ink);
-    canvas.setTextSize(0.82f);
-    canvas.drawString(index == 0 ? "DASHBOARD" : "STOPWATCH",
-                      centers[index], 278);
+    if (index < 2) {
+      canvas.drawString(index == 0 ? "DASHBOARD" : "STOPWATCH",
+                        centers[index], 293);
+    } else {
+      canvas.drawString("TIMER", centers[index], 293);
+    }
     canvas.setTextSize(1);
   }
 
   canvas.setTextColor(muted);
   useChinese16();
   canvas.setTextSize(0.86f);
-  canvas.drawString("A / B 选择 · 轻触进入", 225, 374);
+  canvas.drawString("A / B 前后选择 · 轻触进入", 225, 374);
   canvas.setTextSize(1);
 }
 
@@ -4042,6 +4101,209 @@ void drawLocalStopwatchPage() {
   canvas.drawString(footer, 225, kStopwatchFooterY);
 }
 
+String formatLocalCountdownClock(uint64_t elapsedMs) {
+  uint64_t totalSeconds = elapsedMs / 1000;
+  uint64_t minutes = totalSeconds / 60;
+  uint64_t seconds = totalSeconds % 60;
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), "%02llu:%02llu",
+           static_cast<unsigned long long>(minutes),
+           static_cast<unsigned long long>(seconds));
+  return String(buffer);
+}
+
+String formatLocalCountdownPreset(uint16_t minutes, char button) {
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), "%c  %02u MIN", button,
+           static_cast<unsigned int>(minutes));
+  return String(buffer);
+}
+
+void drawLocalCountdownPage() {
+  const uint16_t background = rgb(0, 0, 0);
+  const uint16_t panel = rgb(65, 72, 75);
+  const uint16_t divider = rgb(88, 100, 106);
+  const uint16_t elapsedColor = rgb(216, 242, 255);
+  const uint16_t presetAColor = rgb(179, 205, 255);
+  const uint16_t presetBColor = rgb(156, 241, 182);
+  const uint16_t alertColor = rgb(255, 158, 171);
+  const uint16_t buttonInk = rgb(20, 24, 27);
+  const uint16_t muted = rgb(145, 158, 164);
+  uint32_t now = millis();
+  uint64_t elapsedMs = localCountdownElapsedMs(localCountdown, now);
+  uint64_t targetMs = localCountdownTargetMs(localCountdown);
+  if (targetMs == 0) {
+    targetMs = static_cast<uint64_t>(localCountdown.presetMinutes[0]) * 60000ULL;
+  }
+  bool expired = localCountdown.state == LocalCountdownState::expired ||
+                 localCountdown.state == LocalCountdownState::overtimePaused;
+  uint64_t heroMs = expired ? localCountdownOvertimeMs(localCountdown, now)
+                            : elapsedMs;
+
+  canvas.fillScreen(background);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(rgb(205, 235, 249));
+  useEditorialBold18();
+  canvas.drawString("TIMER", 225, 24);
+
+  // These are preset indicators for the physical A/B buttons, so keep them
+  // visually lighter than the primary touch actions below.
+  canvas.fillSmoothRoundRect(72, 58, 118, 58, 28, presetAColor);
+  canvas.fillSmoothRoundRect(260, 58, 118, 58, 28, presetBColor);
+  canvas.setTextColor(buttonInk);
+  useEditorialBold18();
+  canvas.drawString(formatLocalCountdownPreset(localCountdown.presetMinutes[0], 'A'),
+                    131, 87);
+  canvas.drawString(formatLocalCountdownPreset(localCountdown.presetMinutes[1], 'B'),
+                    319, 87);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  canvas.drawString("PHYSICAL PRESETS", 225, 132);
+
+  canvas.fillSmoothRoundRect(0, 148, 450, 302, 58, panel);
+  canvas.setTextColor(expired ? alertColor : muted);
+  useEditorialBold24();
+  bool paused = localCountdown.state == LocalCountdownState::paused ||
+                localCountdown.state == LocalCountdownState::overtimePaused;
+  const char *status = localCountdown.state == LocalCountdownState::idle
+                           ? "READY"
+                           : localCountdown.state == LocalCountdownState::running
+                                 ? "ELAPSED"
+                                 : paused ? "PAUSED" : "OVERTIME";
+  canvas.drawString(status, 225, 180);
+
+  canvas.setTextColor(expired ? alertColor : elapsedColor);
+  if (stopwatchDigitFontReady) {
+    canvas.setFont(&stopwatchDigitFont);
+  } else {
+    canvas.setFont(&fonts::DejaVu56);
+  }
+  canvas.setTextSize(1);
+  String heroClock = formatLocalCountdownClock(heroMs);
+  int heroCenterX = expired ? 237 : 225;
+  canvas.drawString(heroClock, heroCenterX, 237);
+  if (expired) {
+    int clockWidth = canvas.textWidth(heroClock);
+    int plusX = heroCenterX - clockWidth / 2 - 19;
+    canvas.fillSmoothRoundRect(plusX - 11, 234, 22, 6, 3, alertColor);
+    canvas.fillSmoothRoundRect(plusX - 3, 226, 6, 22, 3, alertColor);
+  }
+
+  uint64_t remainingMs = localCountdownRemainingMs(localCountdown, now);
+  String detail;
+  if (expired) {
+    detail = "ELAPSED " + formatLocalCountdownClock(elapsedMs) + "  /  TARGET " +
+             formatLocalCountdownClock(targetMs);
+  } else {
+    detail = "LEFT " + formatLocalCountdownClock(remainingMs) + "  /  TARGET " +
+             formatLocalCountdownClock(targetMs);
+  }
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  canvas.drawString(detail, 225, 289);
+
+  constexpr int progressX = 70;
+  constexpr int progressY = 313;
+  constexpr int progressWidth = 310;
+  canvas.fillSmoothRoundRect(progressX, progressY, progressWidth, 6, 3, divider);
+  int filledWidth = targetMs == 0 || elapsedMs == 0
+                        ? 0
+                        : elapsedMs >= targetMs
+                              ? progressWidth
+                              : static_cast<int>(elapsedMs * progressWidth / targetMs);
+  if (filledWidth > 0) {
+    canvas.fillSmoothRoundRect(progressX, progressY, filledWidth, 6, 3,
+                               expired ? alertColor : presetBColor);
+  }
+
+  bool canReset = localCountdownCanReset(localCountdown.state);
+  uint16_t resetColor = canReset ? presetAColor : divider;
+  uint16_t setColor = localCountdown.state == LocalCountdownState::idle
+                          ? presetBColor
+                          : divider;
+  canvas.fillSmoothRoundRect(76, 340, 144, 76, 36, resetColor);
+  canvas.fillSmoothRoundRect(230, 340, 144, 76, 36, setColor);
+  canvas.setTextColor(buttonInk);
+  useEditorialBold24();
+  canvas.drawString("RESET", 148, 378);
+  canvas.drawString("SET", 302, 378);
+}
+
+String formatLocalCountdownEditorValue(int minutes) {
+  if (minutes < static_cast<int>(kLocalCountdownMinimumMinutes) ||
+      minutes > static_cast<int>(kLocalCountdownMaximumMinutes)) {
+    return "--";
+  }
+  char buffer[4];
+  snprintf(buffer, sizeof(buffer), "%02d", minutes);
+  return String(buffer);
+}
+
+void drawLocalCountdownSettingsPage() {
+  const uint16_t background = rgb(0, 0, 0);
+  const uint16_t panel = rgb(65, 72, 75);
+  const uint16_t divider = rgb(88, 100, 106);
+  const uint16_t ink = rgb(216, 242, 255);
+  const uint16_t presetAColor = rgb(179, 205, 255);
+  const uint16_t presetBColor = rgb(156, 241, 182);
+  const uint16_t buttonInk = rgb(20, 24, 27);
+  const uint16_t muted = rgb(145, 158, 164);
+  const uint16_t inactive = rgb(82, 90, 94);
+  std::size_t selected = localCountdownEditor.selectedPreset > 1
+                             ? 0
+                             : localCountdownEditor.selectedPreset;
+  int currentMinutes = localCountdownEditor.draftMinutes[selected];
+
+  canvas.fillScreen(background);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextSize(1);
+  canvas.setTextColor(ink);
+  useEditorialBold18();
+  canvas.drawString("SET TIMER", 225, 24);
+
+  uint16_t aColor = selected == 0 ? presetAColor : inactive;
+  uint16_t bColor = selected == 1 ? presetBColor : inactive;
+  canvas.fillSmoothRoundRect(72, 58, 118, 58, 28, aColor);
+  canvas.fillSmoothRoundRect(260, 58, 118, 58, 28, bColor);
+  useEditorialBold18();
+  canvas.setTextColor(selected == 0 ? buttonInk : muted);
+  canvas.drawString(formatLocalCountdownPreset(localCountdownEditor.draftMinutes[0], 'A'),
+                    131, 87);
+  canvas.setTextColor(selected == 1 ? buttonInk : muted);
+  canvas.drawString(formatLocalCountdownPreset(localCountdownEditor.draftMinutes[1], 'B'),
+                    319, 87);
+
+  canvas.fillSmoothRoundRect(0, 128, 450, 322, 58, panel);
+  canvas.setTextColor(selected == 0 ? presetAColor : presetBColor);
+  useEditorialBold18();
+  canvas.drawString(selected == 0 ? "PRESET A" : "PRESET B", 225, 151);
+
+  canvas.setTextColor(muted);
+  useEditorialBold24();
+  canvas.drawString(formatLocalCountdownEditorValue(currentMinutes - 1), 225, 190);
+
+  canvas.setTextColor(ink);
+  if (stopwatchDigitFontReady) {
+    canvas.setFont(&stopwatchDigitFont);
+  } else {
+    canvas.setFont(&fonts::DejaVu56);
+  }
+  canvas.drawString(formatLocalCountdownEditorValue(currentMinutes), 204, 247);
+  useEditorialBold24();
+  canvas.drawString("MIN", 294, 253);
+
+  canvas.setTextColor(muted);
+  canvas.drawString(formatLocalCountdownEditorValue(currentMinutes + 1), 225, 306);
+  canvas.fillSmoothRoundRect(128, 272, 194, 2, 1, divider);
+
+  canvas.fillSmoothRoundRect(76, 340, 144, 76, 36, presetAColor);
+  canvas.fillSmoothRoundRect(230, 340, 144, 76, 36, presetBColor);
+  canvas.setTextColor(buttonInk);
+  useEditorialBold24();
+  canvas.drawString("CANCEL", 148, 378);
+  canvas.drawString("SAVE", 302, 378);
+}
+
 void renderCurrentPage(uint32_t now, uint16_t background) {
   editorialFrameAccentActive = false;
   editorialFrameBurstActive = false;
@@ -4052,6 +4314,15 @@ void renderCurrentPage(uint32_t now, uint16_t background) {
   }
   if (appMode == DashboardAppMode::stopwatch) {
     drawLocalStopwatchPage();
+    composeRenderedFrame(background);
+    return;
+  }
+  if (appMode == DashboardAppMode::countdownTimer) {
+    if (localCountdownEditor.open) {
+      drawLocalCountdownSettingsPage();
+    } else {
+      drawLocalCountdownPage();
+    }
     composeRenderedFrame(background);
     return;
   }
@@ -4115,6 +4386,8 @@ void enterAppLauncher() {
   overlayMode = OverlayMode::none;
   completionAnimationRunning = false;
   completionBaselineReady = false;
+  localCountdownCancelEditing(localCountdownEditor);
+  localCountdownWheelTracking = false;
   resetDashboardInputState();
   requireHighPerformance();
   drawCurrentPage();
@@ -4139,6 +4412,40 @@ void enterLocalStopwatchApp() {
   drawCurrentPage();
 }
 
+void enterLocalCountdownApp() {
+  appMode = DashboardAppMode::countdownTimer;
+  overlayMode = OverlayMode::none;
+  localCountdownCancelEditing(localCountdownEditor);
+  localCountdownWheelTracking = false;
+  resetDashboardInputState();
+  lastLocalCountdownDrawSecond = UINT64_MAX;
+  requireHighPerformance();
+  drawCurrentPage();
+}
+
+void updateLocalCountdownTimer() {
+  uint32_t now = millis();
+  LocalCountdownAction action = localCountdownUpdate(localCountdown, now);
+  if (action != LocalCountdownAction::expired) return;
+
+  // Countdown is a local appliance function: it remains authoritative while
+  // the display is asleep or another app is open. At the deadline it wakes and
+  // foregrounds itself before delivering one unambiguous alert.
+  appMode = DashboardAppMode::countdownTimer;
+  overlayMode = OverlayMode::none;
+  completionAnimationRunning = false;
+  completionBaselineReady = false;
+  lastLocalCountdownDrawSecond = UINT64_MAX;
+  if (screenLocked) {
+    setScreenLocked(false);
+  } else {
+    drawCurrentPage();
+  }
+  startVibration(205, 520);
+  startTonePattern(kCountdownDoneTones,
+                   sizeof(kCountdownDoneTones) / sizeof(kCountdownDoneTones[0]));
+}
+
 void updateAppShellButtons() {
   bool aPressed = M5.BtnA.wasPressed();
   bool bPressed = readBButtonPressed();
@@ -4147,32 +4454,118 @@ void updateAppShellButtons() {
 
   if (appMode == DashboardAppMode::launcher) {
     if (aPressed) {
-      launcherSelection = 0;
+      launcherSelection = (launcherSelection + 2) % 3;
       startVibration(65, 30);
       drawCurrentPage();
     } else if (bStarted) {
-      launcherSelection = 1;
+      launcherSelection = (launcherSelection + 1) % 3;
       startVibration(65, 30);
       drawCurrentPage();
     }
     return;
   }
 
-  if (appMode != DashboardAppMode::stopwatch) return;
-  if (aPressed) {
-    std::size_t previousLapCount = localStopwatch.lapCount;
-    localStopwatchLeftAction(localStopwatch, millis());
-    if (localStopwatch.lapCount != previousLapCount) localStopwatchLapOffset = 0;
-    startVibration(75, 32);
-    drawCurrentPage();
-  } else if (bStarted) {
-    localStopwatchRightAction(localStopwatch, millis());
-    startVibration(75, 32);
+  if (appMode == DashboardAppMode::stopwatch) {
+    if (aPressed) {
+      std::size_t previousLapCount = localStopwatch.lapCount;
+      localStopwatchLeftAction(localStopwatch, millis());
+      if (localStopwatch.lapCount != previousLapCount) localStopwatchLapOffset = 0;
+      startVibration(75, 32);
+      drawCurrentPage();
+    } else if (bStarted) {
+      localStopwatchRightAction(localStopwatch, millis());
+      startVibration(75, 32);
+      drawCurrentPage();
+    }
+    return;
+  }
+
+  if (appMode == DashboardAppMode::countdownTimer && (aPressed || bStarted)) {
+    std::size_t presetIndex = aPressed ? 0 : 1;
+    if (localCountdownEditor.open) {
+      if (localCountdownSelectEditorPreset(localCountdownEditor, presetIndex)) {
+        startVibration(62, 28);
+        drawCurrentPage();
+      }
+      return;
+    }
+    LocalCountdownAction action =
+        localCountdownPresetAction(localCountdown, presetIndex, millis());
+    if (action != LocalCountdownAction::none) {
+      lastLocalCountdownDrawSecond = UINT64_MAX;
+      startVibration(80, 36);
+      drawCurrentPage();
+    }
+  }
+}
+
+void updateLocalCountdownSettingsTouch(const m5::touch_detail_t &touch) {
+  int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
+  int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
+  AppShellTouchTarget target =
+      localCountdownSettingsTouchTarget(designX, designY);
+
+  if (touch.wasPressed()) {
+    localCountdownWheelTracking = target == AppShellTouchTarget::wheelAction;
+    if (localCountdownWheelTracking) {
+      std::size_t selected = localCountdownEditor.selectedPreset > 1
+                                 ? 0
+                                 : localCountdownEditor.selectedPreset;
+      localCountdownWheelStartMinutes =
+          localCountdownEditor.draftMinutes[selected];
+    }
+    return;
+  }
+
+  if (localCountdownWheelTracking) {
+    int distance = touch.distanceY();
+    // Nearby values use two deliberate fine detents. Continuing the same drag
+    // accelerates across larger ranges while still stopping exactly on release.
+    int steps = localCountdownWheelSteps(distance);
+    bool changed = localCountdownSetEditorMinutes(
+        localCountdownEditor,
+        static_cast<int>(localCountdownWheelStartMinutes) + steps);
+    if (changed) {
+      startVibration(46, 18);
+      drawCurrentPage();
+    }
+    if (touch.wasReleased()) localCountdownWheelTracking = false;
+    return;
+  }
+
+  if (!touch.wasReleased() ||
+      abs(touch.distanceX()) >= kGestureLockThreshold ||
+      abs(touch.distanceY()) >= kGestureLockThreshold) {
+    return;
+  }
+
+  bool changed = false;
+  if (target == AppShellTouchTarget::presetA) {
+    changed = localCountdownSelectEditorPreset(localCountdownEditor, 0);
+  } else if (target == AppShellTouchTarget::presetB) {
+    changed = localCountdownSelectEditorPreset(localCountdownEditor, 1);
+  } else if (target == AppShellTouchTarget::cancelAction) {
+    localCountdownCancelEditing(localCountdownEditor);
+    changed = true;
+  } else if (target == AppShellTouchTarget::saveAction &&
+             localCountdownCommitEditing(localCountdown, localCountdownEditor)) {
+    saveCountdownPreferences();
+    changed = true;
+  }
+  if (changed) {
+    lastLocalCountdownDrawSecond = UINT64_MAX;
+    startVibration(target == AppShellTouchTarget::saveAction ? 86 : 62,
+                   target == AppShellTouchTarget::saveAction ? 38 : 28);
     drawCurrentPage();
   }
 }
 
 void updateAppShellTouch(const m5::touch_detail_t &touch) {
+  if (appMode == DashboardAppMode::countdownTimer &&
+      localCountdownEditor.open) {
+    updateLocalCountdownSettingsTouch(touch);
+    return;
+  }
   if (!touch.wasReleased()) return;
   int designX = touch.base_x - displayFrameOffsetX() - designFrameOffset();
   int designY = touch.base_y - displayFrameOffsetY() - designFrameOffset();
@@ -4207,22 +4600,51 @@ void updateAppShellTouch(const m5::touch_detail_t &touch) {
       launcherSelection = 1;
       startVibration(85, 36);
       enterLocalStopwatchApp();
+    } else if (target == AppShellTouchTarget::countdownTimer) {
+      launcherSelection = 2;
+      startVibration(85, 36);
+      enterLocalCountdownApp();
     }
     return;
   }
 
-  if (appMode != DashboardAppMode::stopwatch) return;
-  AppShellTouchTarget target = localStopwatchTouchTarget(designX, designY);
-  if (target == AppShellTouchTarget::leftAction) {
-    std::size_t previousLapCount = localStopwatch.lapCount;
-    localStopwatchLeftAction(localStopwatch, millis());
-    if (localStopwatch.lapCount != previousLapCount) localStopwatchLapOffset = 0;
-    startVibration(75, 32);
-    drawCurrentPage();
-  } else if (target == AppShellTouchTarget::rightAction) {
-    localStopwatchRightAction(localStopwatch, millis());
-    startVibration(75, 32);
-    drawCurrentPage();
+  if (appMode == DashboardAppMode::stopwatch) {
+    AppShellTouchTarget target = localStopwatchTouchTarget(designX, designY);
+    if (target == AppShellTouchTarget::leftAction) {
+      std::size_t previousLapCount = localStopwatch.lapCount;
+      localStopwatchLeftAction(localStopwatch, millis());
+      if (localStopwatch.lapCount != previousLapCount) localStopwatchLapOffset = 0;
+      startVibration(75, 32);
+      drawCurrentPage();
+    } else if (target == AppShellTouchTarget::rightAction) {
+      localStopwatchRightAction(localStopwatch, millis());
+      startVibration(75, 32);
+      drawCurrentPage();
+    }
+    return;
+  }
+
+  if (appMode == DashboardAppMode::countdownTimer) {
+    AppShellTouchTarget target = localCountdownTouchTarget(designX, designY);
+    LocalCountdownAction action = LocalCountdownAction::none;
+    if (target == AppShellTouchTarget::resetAction &&
+        localCountdownCanReset(localCountdown.state)) {
+      localCountdownReset(localCountdown);
+      action = LocalCountdownAction::reset;
+    } else if (target == AppShellTouchTarget::setAction &&
+               localCountdownBeginEditing(localCountdown,
+                                           localCountdownEditor)) {
+      lastLocalCountdownDrawSecond = UINT64_MAX;
+      startVibration(72, 32);
+      drawCurrentPage();
+      return;
+    }
+    if (action != LocalCountdownAction::none) {
+      lastLocalCountdownDrawSecond = UINT64_MAX;
+      startVibration(action == LocalCountdownAction::reset ? 95 : 75,
+                     action == LocalCountdownAction::reset ? 48 : 32);
+      drawCurrentPage();
+    }
   }
 }
 
@@ -4286,11 +4708,22 @@ void appendDashboardResults(JsonObject source, char provider) {
   JsonArray results = source["results"].as<JsonArray>();
   if (results.isNull()) return;
   for (JsonObject result : results) {
-    if (dashboardResults.count >= kMaxDashboardResults) break;
-    DashboardResult &destination = dashboardResults.items[dashboardResults.count++];
+    int64_t completedAt = result["completed_at"] | 0LL;
+    int64_t timestamps[kMaxDashboardResults] = {};
+    for (size_t index = 0; index < dashboardResults.count; ++index) {
+      timestamps[index] = dashboardResults.items[index].completedAt;
+    }
+    int destinationIndex = dashboardCompletionReplacementIndex(
+        timestamps, static_cast<int>(dashboardResults.count),
+        static_cast<int>(kMaxDashboardResults), completedAt);
+    if (destinationIndex < 0) continue;
+    if (destinationIndex == static_cast<int>(dashboardResults.count)) {
+      ++dashboardResults.count;
+    }
+    DashboardResult &destination = dashboardResults.items[destinationIndex];
     destination.provider = provider;
     destination.title = String(static_cast<const char *>(result["title"] | "已完成任务"));
-    destination.completedAt = result["completed_at"] | 0LL;
+    destination.completedAt = completedAt;
   }
 }
 
@@ -4764,7 +5197,8 @@ void updateHttpOta() {
   }
   bool timerActive = timerRunning(ticktick.stopwatchState) ||
                      timerRunning(ticktick.countdownState) ||
-                     localStopwatch.state == LocalStopwatchState::running;
+                     localStopwatch.state == LocalStopwatchState::running ||
+                     localCountdownActive(localCountdown);
   bool voiceActive = voiceSessionActive || voiceCaptureActive;
   if (appMode != DashboardAppMode::dashboard || currentPage != 0 ||
       overlayMode != OverlayMode::none ||
@@ -6510,6 +6944,7 @@ void setup() {
   disableBottomLed();
   M5.Display.setRotation(0);
   loadUiPreferences();
+  loadCountdownPreferences();
   loadOtaPreferences();
   // M5.begin() initializes the internal speaker by default. The dashboard is
   // silent most of the time, so leave the codec and PA off until a tone starts.
@@ -6590,6 +7025,7 @@ void loop() {
   updatePowerButton();
   updateVibration();
   updateTonePattern();
+  updateLocalCountdownTimer();
   updateVoiceAudio();
   updateAudioPowerGuard();
   updateDevicePower();
@@ -6664,6 +7100,14 @@ void loop() {
       lastLocalStopwatchDrawAt = now;
       requireHighPerformance();
       drawLocalStopwatchTimeOnly();
+    }
+    if (appMode == DashboardAppMode::countdownTimer &&
+        localCountdownClockAdvances(localCountdown.state)) {
+      uint64_t shownSecond = localCountdownElapsedMs(localCountdown, now) / 1000;
+      if (shownSecond != lastLocalCountdownDrawSecond) {
+        lastLocalCountdownDrawSecond = shownSecond;
+        drawCurrentPage();
+      }
     }
     if (now - lastFetchAt >= dashboardStateRefreshInterval() &&
         !usbReplyPending(now, lastUsbRequestAt, kUsbReplyGraceMs)) {

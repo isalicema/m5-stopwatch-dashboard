@@ -21,12 +21,14 @@ class AppShellTests(unittest.TestCase):
             PROJECT / "firmware/M5Dashboard/device_config.cpp"
         ).read_text(encoding="utf-8")
 
-    def test_boots_into_two_program_launcher(self):
+    def test_boots_into_three_program_launcher(self):
         self.assertIn("DashboardAppMode appMode = DashboardAppMode::launcher", self.source)
         self.assertIn('canvas.drawString("选择程序"', self.source)
         self.assertIn('"DASHBOARD" : "STOPWATCH"', self.source)
+        self.assertIn('canvas.drawString("TIMER"', self.source)
         self.assertIn("enterDashboardApp();", self.source)
         self.assertIn("enterLocalStopwatchApp();", self.source)
+        self.assertIn("enterLocalCountdownApp();", self.source)
 
     def test_local_stopwatch_preserves_factory_button_semantics(self):
         self.assertIn("localStopwatchLap(model, now)", self.logic)
@@ -35,6 +37,80 @@ class AppShellTests(unittest.TestCase):
         self.assertIn("localStopwatchStart(model, now)", self.logic)
         self.assertIn('state == LocalStopwatchState::paused ? "RESET" : "LAP"', self.logic)
         self.assertIn('state == LocalStopwatchState::running ? "STOP" : "START"', self.logic)
+
+    def test_countdown_timer_has_two_persistent_adjustable_presets(self):
+        self.assertIn("uint16_t presetMinutes[2] = {8, 10};", self.logic)
+        self.assertIn("kLocalCountdownMinimumMinutes = 1", self.logic)
+        self.assertIn("kLocalCountdownMaximumMinutes = 99", self.logic)
+        self.assertIn("LocalCountdownEditorModel", self.logic)
+        self.assertIn("localCountdownBeginEditing", self.logic)
+        self.assertIn("localCountdownAdjustEditorMinutes", self.logic)
+        self.assertIn("localCountdownCommitEditing", self.logic)
+        self.assertIn("localCountdownPresetAction", self.logic)
+        self.assertIn('prefs.begin("m5dash-timer", true)', self.source)
+        self.assertIn('prefs.putUShort("presetA"', self.source)
+        self.assertIn('prefs.putUShort("presetB"', self.source)
+
+    def test_countdown_timer_is_local_wakes_and_alerts_at_deadline(self):
+        update = self.source.split("void updateLocalCountdownTimer()", 1)[1].split(
+            "void updateAppShellButtons()", 1
+        )[0]
+        self.assertIn("localCountdownUpdate(localCountdown, now)", update)
+        self.assertIn("appMode = DashboardAppMode::countdownTimer;", update)
+        self.assertIn("if (screenLocked)", update)
+        self.assertIn("setScreenLocked(false);", update)
+        self.assertIn("startVibration(205, 520);", update)
+        self.assertIn("startTonePattern(kCountdownDoneTones", update)
+        self.assertIn("localCountdownActive(localCountdown)", self.source)
+        self.assertIn(
+            "{988, 180, 60}, {659, 420, 320}, {988, 180, 60}, {659, 780, 0}",
+            self.source,
+        )
+        self.assertIn("kAiScreamTones", self.source)
+
+    def test_countdown_timer_keeps_stopwatch_style_and_large_touch_actions(self):
+        timer_page = self.source.split("void drawLocalCountdownPage()", 1)[1].split(
+            "void renderCurrentPage", 1
+        )[0]
+        self.assertIn('canvas.drawString("TIMER"', timer_page)
+        self.assertIn("rgb(0, 0, 0)", timer_page)
+        self.assertIn("rgb(65, 72, 75)", timer_page)
+        self.assertIn('canvas.drawString("RESET"', timer_page)
+        self.assertIn('canvas.drawString("SET"', timer_page)
+        self.assertIn("localCountdownTouchTarget", self.source)
+        self.assertIn("fillSmoothRoundRect(72, 58, 118, 58, 28", timer_page)
+        self.assertIn("fillSmoothRoundRect(76, 340, 144, 76, 36", timer_page)
+        self.assertIn('canvas.drawString("PHYSICAL PRESETS", 225, 132)', timer_page)
+        self.assertIn("localCountdownCanReset(localCountdown.state)", timer_page)
+        self.assertIn("LocalCountdownState::overtimePaused", timer_page)
+        self.assertIn("canvas.textWidth(heroClock)", timer_page)
+        self.assertIn("plusX - 11", timer_page)
+        self.assertNotIn('"+%02llu:%02llu"', timer_page)
+        self.assertNotIn("FreeSans", timer_page)
+        self.assertIn("useEditorialBold18();", timer_page)
+        self.assertIn("useEditorialMicro14();", timer_page)
+        self.assertIn("useEditorialBold24();", timer_page)
+
+    def test_countdown_timer_set_page_uses_a_touch_wheel_and_explicit_save(self):
+        settings_page = self.source.split(
+            "void drawLocalCountdownSettingsPage()", 1
+        )[1].split("void renderCurrentPage", 1)[0]
+        settings_touch = self.source.split(
+            "void updateLocalCountdownSettingsTouch", 1
+        )[1].split("void updateAppShellTouch", 1)[0]
+        self.assertIn('canvas.drawString("SET TIMER"', settings_page)
+        self.assertIn('selected == 0 ? "PRESET A" : "PRESET B"', settings_page)
+        self.assertIn('canvas.drawString("MIN"', settings_page)
+        self.assertIn('canvas.drawString("CANCEL"', settings_page)
+        self.assertIn('canvas.drawString("SAVE"', settings_page)
+        self.assertIn("localCountdownSettingsTouchTarget", settings_touch)
+        self.assertIn("localCountdownWheelSteps(distance)", settings_touch)
+        self.assertIn("localCountdownSetEditorMinutes", settings_touch)
+        self.assertIn("localCountdownCommitEditing", settings_touch)
+        self.assertIn("saveCountdownPreferences();", settings_touch)
+        self.assertIn("kFinePixelsPerMinute = 32", self.logic)
+        self.assertIn("kFastPixelsPerMinute = 12", self.logic)
+        self.assertNotIn("FreeSans", settings_page)
 
     def test_power_short_sleeps_double_opens_launcher_and_usb_hold_is_reserved(self):
         normalized_logic = " ".join(self.interaction_logic.split())
@@ -57,6 +133,8 @@ class AppShellTests(unittest.TestCase):
         self.assertIn("void playPowerOffTransition()", self.source)
         self.assertIn('starting ? "M5 DASHBOARD" : "POWER OFF"', self.source)
         self.assertIn('starting ? "STARTING" : "SHUTTING DOWN"', self.source)
+        self.assertIn("playBootTransition();", self.source)
+        self.assertIn("playPowerOffTransition();", self.source)
         self.assertIn("pulseVibrationBlocking(38, 18);", self.source)
         self.assertIn("pulseVibrationBlocking(135, 75);", self.source)
         self.assertIn("pulseVibrationBlocking(190, 115);", self.source)

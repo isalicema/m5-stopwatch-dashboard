@@ -107,6 +107,11 @@ int main() {
   assert(dashboardAlignedRunningTimerBase(68, 2, false) == 66);
   assert(dashboardAlignedRunningTimerBase(68, 2, true) == 70);
   assert(dashboardAlignedRunningTimerBase(1, 2, false) == 0);
+  int64_t completionTimestamps[] = {600, 500, 400, 300, 200, 100};
+  assert(dashboardCompletionReplacementIndex(completionTimestamps, 3, 6, 450) == 3);
+  assert(dashboardCompletionReplacementIndex(completionTimestamps, 6, 6, 450) == 5);
+  assert(dashboardCompletionReplacementIndex(completionTimestamps, 6, 6, 90) == -1);
+  assert(dashboardCompletionReplacementIndex(nullptr, 0, 6, 700) == -1);
 
   assert(dashboardRectInsideCircle(kEditorialHeaderX, kEditorialHeaderBoundsY,
                                    kEditorialHeaderBoundsWidth,
@@ -266,8 +271,9 @@ int main() {
   assert(localStopwatch.state == LocalStopwatchState::stopped);
   assert(localStopwatchElapsedMs(localStopwatch, 12000) == 0);
   assert(localStopwatch.lapCount == 0);
-  assert(appLauncherTouchTarget(137, 222) == AppShellTouchTarget::dashboard);
-  assert(appLauncherTouchTarget(313, 222) == AppShellTouchTarget::stopwatch);
+  assert(appLauncherTouchTarget(85, 218) == AppShellTouchTarget::dashboard);
+  assert(appLauncherTouchTarget(225, 218) == AppShellTouchTarget::stopwatch);
+  assert(appLauncherTouchTarget(365, 218) == AppShellTouchTarget::countdownTimer);
   assert(appLauncherTouchTarget(225, 100) == AppShellTouchTarget::none);
   assert(localStopwatchTouchTarget(150, 90) == AppShellTouchTarget::leftAction);
   assert(localStopwatchTouchTarget(299, 90) == AppShellTouchTarget::rightAction);
@@ -279,6 +285,104 @@ int main() {
   assert(localStopwatchLapPageOffset(0, -1, 5) == 0);
   assert(localStopwatchLapRegionContains(225, 320));
   assert(!localStopwatchLapRegionContains(225, 240));
+
+  LocalCountdownModel countdown;
+  assert(countdown.state == LocalCountdownState::idle);
+  assert(countdown.presetMinutes[0] == 8);
+  assert(countdown.presetMinutes[1] == 10);
+  assert(localCountdownPresetAction(countdown, 0, 100) ==
+         LocalCountdownAction::started);
+  assert(countdown.state == LocalCountdownState::running);
+  assert(!localCountdownCanReset(countdown.state));
+  assert(localCountdownTargetMs(countdown) == 480000);
+  assert(localCountdownElapsedMs(countdown, 60100) == 60000);
+  assert(localCountdownRemainingMs(countdown, 60100) == 420000);
+  assert(localCountdownUpdate(countdown, 480099) == LocalCountdownAction::none);
+  assert(localCountdownUpdate(countdown, 480100) ==
+         LocalCountdownAction::expired);
+  assert(countdown.state == LocalCountdownState::expired);
+  assert(localCountdownOvertimeMs(countdown, 485100) == 5000);
+  assert(!localCountdownCanReset(countdown.state));
+  assert(localCountdownPresetAction(countdown, 1, 490100) ==
+         LocalCountdownAction::none);
+  assert(localCountdownPresetAction(countdown, 0, 490100) ==
+         LocalCountdownAction::paused);
+  assert(countdown.state == LocalCountdownState::overtimePaused);
+  assert(localCountdownOvertimeMs(countdown, 600000) == 10000);
+  assert(localCountdownCanReset(countdown.state));
+  assert(localCountdownPresetAction(countdown, 0, 600000) ==
+         LocalCountdownAction::resumed);
+  assert(countdown.state == LocalCountdownState::expired);
+  assert(localCountdownOvertimeMs(countdown, 601000) == 11000);
+  assert(!localCountdownCanReset(countdown.state));
+  localCountdownReset(countdown);
+  assert(localCountdownPresetAction(countdown, 0, 700000) ==
+         LocalCountdownAction::started);
+  assert(countdown.activePreset == 0);
+  assert(localCountdownPresetAction(countdown, 1, 701000) ==
+         LocalCountdownAction::none);
+  assert(localCountdownPresetAction(countdown, 0, 701000) ==
+         LocalCountdownAction::paused);
+  assert(localCountdownCanReset(countdown.state));
+  assert(localCountdownElapsedMs(countdown, 710000) == 1000);
+  assert(localCountdownPresetAction(countdown, 1, 710000) ==
+         LocalCountdownAction::none);
+  assert(localCountdownPresetAction(countdown, 0, 710000) ==
+         LocalCountdownAction::resumed);
+  assert(!localCountdownCanReset(countdown.state));
+  assert(localCountdownElapsedMs(countdown, 711000) == 2000);
+  localCountdownReset(countdown);
+  assert(countdown.state == LocalCountdownState::idle);
+  assert(countdown.presetMinutes[0] == 8);
+  assert(countdown.presetMinutes[1] == 10);
+
+  LocalCountdownEditorModel editor;
+  assert(localCountdownBeginEditing(countdown, editor));
+  assert(editor.open);
+  assert(editor.selectedPreset == 0);
+  assert(localCountdownAdjustEditorMinutes(editor, 1));
+  assert(editor.draftMinutes[0] == 9);
+  assert(localCountdownSetEditorMinutes(editor, 120));
+  assert(editor.draftMinutes[0] == 99);
+  assert(localCountdownSetEditorMinutes(editor, -5));
+  assert(editor.draftMinutes[0] == 1);
+  assert(localCountdownSelectEditorPreset(editor, 1));
+  assert(localCountdownSetEditorMinutes(editor, 20));
+  assert(localCountdownCommitEditing(countdown, editor));
+  assert(!editor.open);
+  assert(countdown.presetMinutes[0] == 1);
+  assert(countdown.presetMinutes[1] == 20);
+  assert(localCountdownBeginEditing(countdown, editor));
+  assert(localCountdownAdjustEditorMinutes(editor, 7));
+  localCountdownCancelEditing(editor);
+  assert(!editor.open);
+  assert(countdown.presetMinutes[0] == 1);
+  assert(countdown.presetMinutes[1] == 20);
+
+  assert(localCountdownWheelSteps(31) == 0);
+  assert(localCountdownWheelSteps(32) == -1);
+  assert(localCountdownWheelSteps(64) == -2);
+  assert(localCountdownWheelSteps(76) == -3);
+  assert(localCountdownWheelSteps(196) == -13);
+  assert(localCountdownWheelSteps(-196) == 13);
+
+  assert(localCountdownTouchTarget(130, 90) == AppShellTouchTarget::none);
+  assert(localCountdownTouchTarget(320, 90) == AppShellTouchTarget::none);
+  assert(localCountdownTouchTarget(150, 382) ==
+         AppShellTouchTarget::resetAction);
+  assert(localCountdownTouchTarget(300, 382) ==
+         AppShellTouchTarget::setAction);
+  assert(localCountdownTouchTarget(225, 250) == AppShellTouchTarget::none);
+  assert(localCountdownSettingsTouchTarget(130, 90) ==
+         AppShellTouchTarget::presetA);
+  assert(localCountdownSettingsTouchTarget(320, 90) ==
+         AppShellTouchTarget::presetB);
+  assert(localCountdownSettingsTouchTarget(225, 230) ==
+         AppShellTouchTarget::wheelAction);
+  assert(localCountdownSettingsTouchTarget(150, 382) ==
+         AppShellTouchTarget::cancelAction);
+  assert(localCountdownSettingsTouchTarget(300, 382) ==
+         AppShellTouchTarget::saveAction);
 
   assert(!usbReplyPending(1000, 0, 500));
   assert(usbReplyPending(1200, 1000, 500));
