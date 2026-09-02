@@ -45,7 +45,7 @@ DASHBOARD_ACTIONS = set(ACTIONS) | {
 
 
 class UsbSnapshotSource:
-    """Use a full upstream dashboard state for USB, with local state as fallback."""
+    """Use a device-sized upstream dashboard state, with local state as fallback."""
 
     def __init__(
         self, local_snapshot: Callable[[], Dict[str, Any]], upstream: Optional[Dict[str, Any]]
@@ -60,7 +60,7 @@ class UsbSnapshotSource:
             return self.local_snapshot()
         timeout = max(0.2, min(5.0, float(self.upstream.get("timeout_seconds", 2))))
         request = urllib.request.Request(
-            base_url + str(self.upstream.get("state_path") or "/api/state"),
+            base_url + str(self.upstream.get("state_path") or "/api/state?view=device"),
             headers={"X-Dashboard-Token": api_token},
         )
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

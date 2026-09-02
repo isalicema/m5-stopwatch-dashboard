@@ -8,6 +8,142 @@ from typing import Any, Dict
 from .peer_state import merge_provider_states
 
 
+def _compact_transcripts(value: Any) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    tasks: list[Dict[str, Any]] = []
+    for source in value[:3]:
+        if not isinstance(source, dict):
+            continue
+        task = {
+            key: copy.deepcopy(source[key])
+            for key in ("id", "title", "status", "content_visible")
+            if key in source
+        }
+        messages = source.get("messages")
+        if isinstance(messages, list):
+            task["messages"] = [
+                {
+                    key: copy.deepcopy(message[key])
+                    for key in ("role", "text")
+                    if key in message
+                }
+                for message in messages[:6]
+                if isinstance(message, dict)
+            ]
+        tasks.append(task)
+    return tasks
+
+
+def _compact_results(value: Any) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {
+            key: copy.deepcopy(source[key])
+            for key in ("id", "title", "completed_at")
+            if key in source
+        }
+        for source in value[:6]
+        if isinstance(source, dict)
+    ]
+
+
+def compact_dashboard_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only fields consumed by the watch firmware."""
+
+    def section(name: str) -> Dict[str, Any]:
+        value = snapshot.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def picked(source: Dict[str, Any], keys: tuple[str, ...]) -> Dict[str, Any]:
+        return {key: copy.deepcopy(source[key]) for key in keys if key in source}
+
+    codex = section("codex")
+    claude = section("claude")
+    ai_usage = section("ai_usage")
+    hotspot = section("ai_hotspot")
+    obsidian = section("obsidian")
+    compact_codex = picked(
+        codex,
+        (
+            "connected",
+            "active_count",
+            "waiting_count",
+            "error_count",
+            "limits",
+            "usage",
+        ),
+    )
+    codex_sessions = codex.get("sessions")
+    compact_codex["sessions"] = [
+        picked(item, ("title", "status"))
+        for item in (codex_sessions[:1] if isinstance(codex_sessions, list) else [])
+        if isinstance(item, dict)
+    ]
+    compact_codex["transcripts"] = _compact_transcripts(codex.get("transcripts"))
+    compact_codex["results"] = _compact_results(codex.get("results"))
+
+    compact_claude = picked(
+        claude,
+        (
+            "connected",
+            "active_count",
+            "waiting_count",
+            "error_count",
+            "today_tokens",
+            "lifetime_tokens",
+            "short_used_percent",
+            "short_resets_at",
+            "week_used_percent",
+            "week_resets_at",
+        ),
+    )
+    compact_claude["transcripts"] = _compact_transcripts(claude.get("transcripts"))
+    compact_claude["results"] = _compact_results(claude.get("results"))
+
+    return {
+        "ok": snapshot.get("ok") is True,
+        "server_time": max(0, int(snapshot.get("server_time") or 0)),
+        "ticktick": picked(
+            section("ticktick"),
+            ("connected", "stopwatch", "countdown", "today_focus_seconds", "error"),
+        ),
+        "codex": compact_codex,
+        "claude": compact_claude,
+        "weather": picked(
+            section("weather"),
+            ("available", "city", "temperature_c", "weather_code", "label", "updated_at"),
+        ),
+        "ai_usage": picked(
+            ai_usage,
+            (
+                "connected",
+                "complete",
+                "approximate",
+                "today_total_tokens",
+                "today_authoritative_tokens",
+            ),
+        ),
+        "ai_hotspot": {
+            **picked(hotspot, ("connected", "active", "unread_count")),
+            "alert": picked(
+                hotspot.get("alert") if isinstance(hotspot.get("alert"), dict) else {},
+                ("id", "title", "source", "url", "received_at"),
+            ),
+        },
+        "obsidian": {
+            **picked(obsidian, ("connected", "available_count", "rolled_at")),
+            "selected": picked(
+                obsidian.get("selected")
+                if isinstance(obsidian.get("selected"), dict)
+                else {},
+                ("title", "folder", "excerpt", "relative_path"),
+            ),
+        },
+    }
+
+
 def _quota_window(windows: list[Dict[str, Any]], short: bool) -> Dict[str, Any]:
     for window in windows:
         if not isinstance(window, dict):
@@ -248,3 +384,6 @@ class DashboardState:
                 "ai_hotspot": copy.deepcopy(self._ai_hotspot),
                 "obsidian": copy.deepcopy(self._obsidian),
             }
+
+    def device_snapshot(self) -> Dict[str, Any]:
+        return compact_dashboard_snapshot(self.snapshot())

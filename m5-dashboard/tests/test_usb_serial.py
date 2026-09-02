@@ -30,7 +30,7 @@ from bridge.usb_serial import (
 
 
 class UsbSerialProtocolTests(unittest.TestCase):
-    def test_upstream_snapshot_preserves_full_state_and_falls_back_locally(self):
+    def test_upstream_snapshot_requests_device_view_and_falls_back_locally(self):
         source = UsbSnapshotSource(
             lambda: {"ok": True, "device_label": "iMac"},
             {
@@ -47,6 +47,8 @@ class UsbSerialProtocolTests(unittest.TestCase):
         opener.open.return_value = response
         with mock.patch("bridge.usb_serial.urllib.request.build_opener", return_value=opener):
             self.assertEqual(source(), {"ok": True, "weather": {"available": True}})
+        requested_url = opener.open.call_args.args[0].full_url
+        self.assertEqual(requested_url, "http://air.local:8765/api/state?view=device")
         opener.open.side_effect = OSError("offline")
         with mock.patch("bridge.usb_serial.urllib.request.build_opener", return_value=opener):
             self.assertEqual(source(), {"ok": True, "device_label": "iMac"})

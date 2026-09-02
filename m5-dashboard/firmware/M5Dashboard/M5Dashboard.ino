@@ -194,6 +194,9 @@ AIUsageData aiUsage;
 TranscriptCollection codexTranscripts;
 TranscriptCollection claudeTranscripts;
 DashboardResultCollection dashboardResults;
+// Reuse one JSON arena for the frequent state poll. Recreating a dynamic
+// document every two seconds caused avoidable heap churn during long uptimes.
+JsonDocument dashboardStateDocument;
 WeatherData weather;
 AIHotspotData aiHotspot;
 ObsidianDiceData obsidianDice;
@@ -4813,21 +4816,23 @@ bool fetchState() {
       (settings.token.length() == 0 && settings.token2.length() == 0)) {
     return false;
   }
-  String url = "http://" + activeBridgeHost + ":" + String(activeBridgePort) + "/api/state";
+  static String url;
+  url = "http://" + activeBridgeHost + ":" + String(activeBridgePort) +
+        "/api/state?view=device";
 
-  String tokens[2] = {settings.token, settings.token2};
+  const String *tokens[2] = {&settings.token, &settings.token2};
   int tokenOrder[2] = {0, 1};
   if (activeTokenSlot == 1) {
     tokenOrder[0] = 1;
     tokenOrder[1] = 0;
   }
-  JsonDocument doc;
+  dashboardStateDocument.clear();
   bool received = false;
   lastBridgeHttpStatus = 0;
   for (int orderIndex = 0; orderIndex < 2; ++orderIndex) {
     int tokenIndex = tokenOrder[orderIndex];
-    if (tokens[tokenIndex].length() == 0 ||
-        (orderIndex > 0 && tokens[tokenIndex] == tokens[tokenOrder[0]])) {
+    if (tokens[tokenIndex]->length() == 0 ||
+        (orderIndex > 0 && *tokens[tokenIndex] == *tokens[tokenOrder[0]])) {
       continue;
     }
     HTTPClient http;
@@ -4836,11 +4841,12 @@ bool fetchState() {
       lastBridgeHttpStatus = -1;
       return false;
     }
-    http.addHeader("X-Dashboard-Token", tokens[tokenIndex]);
+    http.addHeader("X-Dashboard-Token", *tokens[tokenIndex]);
     int statusCode = http.GET();
     lastBridgeHttpStatus = statusCode;
     if (statusCode == HTTP_CODE_OK) {
-      DeserializationError parseError = deserializeJson(doc, http.getStream());
+      DeserializationError parseError =
+          deserializeJson(dashboardStateDocument, http.getStream());
       http.end();
       if (parseError) {
         lastBridgeHttpStatus = -2;
@@ -4855,7 +4861,7 @@ bool fetchState() {
   }
   if (!received) return false;
   bridgeOnline = true;
-  return applyDashboardState(doc);
+  return applyDashboardState(dashboardStateDocument);
 }
 
 void sendUsbDashboardAction(const String &action) {

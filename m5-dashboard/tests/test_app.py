@@ -124,6 +124,31 @@ class DashboardHttpTests(unittest.TestCase):
             response["body"], {"ok": True, "active": True, "pending": True}
         )
 
+    def test_device_view_uses_compact_snapshot_without_changing_full_route(self):
+        class State:
+            def snapshot(self):
+                return {"ok": True, "view": "full"}
+
+            def device_snapshot(self):
+                return {"ok": True, "view": "device"}
+
+        handler = build_handler(State(), "secret")
+
+        def request(path):
+            instance = handler.__new__(handler)
+            instance.path = path
+            instance.headers = {"X-Dashboard-Token": "secret"}
+            instance.client_address = ("127.0.0.1", 1234)
+            response = {}
+            instance._json = lambda status, body: response.update(status=status, body=body)
+            instance.do_GET()
+            return response
+
+        self.assertEqual(request("/api/state")["body"]["view"], "full")
+        self.assertEqual(
+            request("/api/state?view=device")["body"]["view"], "device"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

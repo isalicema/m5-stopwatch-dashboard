@@ -9,7 +9,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .ai_hotspots import AIHotspotMonitor
 from .ai_usage_client import AIUsageMonitor
@@ -208,7 +208,11 @@ def build_handler(
             if client_ip not in ("127.0.0.1", "::1") and client_ip not in seen_clients:
                 seen_clients.add(client_ip)
                 print("Dashboard client connected: %s" % client_ip, flush=True)
-            self._json(HTTPStatus.OK, state.snapshot())
+            device_view = parse_qs(parsed.query).get("view") == ["device"]
+            self._json(
+                HTTPStatus.OK,
+                state.device_snapshot() if device_view else state.snapshot(),
+            )
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
@@ -369,7 +373,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         discovery.start()
         workers.append(discovery)
     if server_config.get("usb_enabled", True):
-        usb_snapshot = UsbSnapshotSource(dashboard.snapshot, server_config.get("usb_upstream"))
+        usb_snapshot = UsbSnapshotSource(
+            dashboard.device_snapshot, server_config.get("usb_upstream")
+        )
         usb_api_token = str(server_config.get("usb_api_token") or server_config["api_token"])
         def usb_action(action: str) -> Dict[str, Any]:
             if action in ACTIONS and ticktick_monitor is not None:

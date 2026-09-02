@@ -1,9 +1,53 @@
 import unittest
 
-from bridge.state import DashboardState
+from bridge.state import DashboardState, compact_dashboard_snapshot
 
 
 class DashboardStateTests(unittest.TestCase):
+    def test_device_snapshot_drops_unrendered_history_and_bounds_lists(self):
+        full = {
+            "ok": True,
+            "server_time": 123,
+            "ticktick": {"connected": True},
+            "codex": {
+                "connected": True,
+                "sessions": [{"title": str(index), "status": "working"} for index in range(9)],
+                "transcripts": [
+                    {
+                        "id": str(index),
+                        "messages": [
+                            {"role": "assistant", "text": str(message)}
+                            for message in range(9)
+                        ],
+                    }
+                    for index in range(5)
+                ],
+                "results": [{"id": str(index)} for index in range(9)],
+            },
+            "claude": {},
+            "weather": {},
+            "ai_usage": {"today_total_tokens": 7, "channels": [{"id": "codex"}]},
+            "ai_hotspot": {
+                "active": True,
+                "alert": {"id": "news", "title": "New model", "summary": "unused"},
+                "events": [{"id": str(index)} for index in range(12)],
+                "source_health": {"rss": {"connected": True}},
+            },
+            "obsidian": {},
+        }
+
+        compact = compact_dashboard_snapshot(full)
+
+        self.assertNotIn("channels", compact["ai_usage"])
+        self.assertNotIn("events", compact["ai_hotspot"])
+        self.assertNotIn("source_health", compact["ai_hotspot"])
+        self.assertNotIn("summary", compact["ai_hotspot"]["alert"])
+        self.assertEqual(len(compact["codex"]["sessions"]), 1)
+        self.assertEqual(len(compact["codex"]["transcripts"]), 3)
+        self.assertEqual(len(compact["codex"]["transcripts"][0]["messages"]), 6)
+        self.assertEqual(len(compact["codex"]["results"]), 6)
+        self.assertEqual(len(full["ai_hotspot"]["events"]), 12)
+
     def test_dashboard_snapshots_ticktick_independently(self):
         state = DashboardState("Air")
         value = {
