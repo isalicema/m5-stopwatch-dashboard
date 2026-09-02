@@ -86,7 +86,10 @@ class _TranscriptTracker:
         return {
             "path": path,
             "session_id": path.stem,
+            "parent_thread_id": "",
             "title": "",
+            "prompt_preview": "",
+            "title_source": "",
             "status": "unknown",
             "last_event": modified,
             "completed_at": 0.0,
@@ -140,8 +143,8 @@ class _TranscriptTracker:
         else:
             indexes[key] = len(messages)
             messages.append(value)
-        if role == "user" and not state.get("title"):
-            state["title"] = cleaned[:36]
+        if role == "user" and not state.get("prompt_preview"):
+            state["prompt_preview"] = cleaned[:36]
         if len(messages) > _MAX_TRACKED_MESSAGES:
             state["messages"] = messages[-_MAX_TRACKED_MESSAGES:]
             state["message_indexes"] = {
@@ -162,6 +165,7 @@ class _TranscriptTracker:
             state
             for state in self._states.values()
             if state.get("status") == "working"
+            and not state.get("parent_thread_id")
             and now
             - max(float(state.get("last_event") or 0), float(state.get("modified") or 0))
             <= self.stale_seconds
@@ -185,11 +189,13 @@ class _TranscriptTracker:
                             "updated_at": int(message.get("updated_at") or 0),
                         }
                     )
-            title = (
-                _clean_text(state.get("title"))
-                if expose
-                else self._fallback_title(state, index)
-            ) or self._fallback_title(state, index)
+            title = self._fallback_title(state, index)
+            if expose:
+                title = (
+                    _clean_text(state.get("title"))
+                    or _clean_text(state.get("prompt_preview"))
+                    or title
+                )
             output.append(
                 {
                     "id": str(state.get("session_id") or "")[-8:],
@@ -222,12 +228,18 @@ class _TranscriptTracker:
             self._advance(path)
         completed = []
         for index, state in enumerate(self._states.values(), 1):
+            if state.get("parent_thread_id"):
+                continue
             stamp = float(
                 state.get("last_completion_at") or state.get("completed_at") or 0
             )
             if stamp < day_start:
                 continue
-            title = _clean_text(state.get("title")) or self._fallback_title(state, index)
+            title = (
+                _clean_text(state.get("title"))
+                or _clean_text(state.get("prompt_preview"))
+                or self._fallback_title(state, index)
+            )
             completed.append(
                 {
                     "id": str(state.get("session_id") or "")[-8:],
@@ -248,6 +260,7 @@ class LocalCodexTranscripts(_TranscriptTracker):
             session_id = payload.get("id")
             if isinstance(session_id, str) and session_id:
                 state["session_id"] = session_id
+            state["parent_thread_id"] = str(payload.get("parent_thread_id") or "")
             return
         if record.get("type") != "event_msg":
             return
@@ -291,6 +304,13 @@ class LocalClaudeTranscripts(_TranscriptTracker):
 
     def _consume(self, state: Dict[str, Any], record: Dict[str, Any], stamp: float) -> None:
         kind = record.get("type")
+        if kind in {"ai-title", "custom-title"}:
+            key = "customTitle" if kind == "custom-title" else "aiTitle"
+            title = _clean_text(record.get(key))
+            if title and (kind == "custom-title" or state.get("title_source") != "custom"):
+                state["title"] = title[:36]
+                state["title_source"] = "custom" if kind == "custom-title" else "ai"
+            return
         if kind not in {"user", "assistant"}:
             return
         message = record.get("message") if isinstance(record.get("message"), dict) else {}

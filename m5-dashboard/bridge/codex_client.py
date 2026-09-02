@@ -320,13 +320,57 @@ def _safe_title(thread: Dict[str, Any], expose: bool, fallback_index: int) -> st
     return "Codex %d" % fallback_index
 
 
+def _thread_status_type(thread: Dict[str, Any]) -> str:
+    status = thread.get("status")
+    if isinstance(status, dict):
+        return str(status.get("type") or "")
+    return str(status or "")
+
+
+def apply_thread_titles(
+    transcripts: List[Dict[str, Any]], threads: List[Dict[str, Any]], expose: bool
+) -> List[Dict[str, Any]]:
+    """Prefer Codex's user-facing task title over the first prompt preview."""
+    if not expose:
+        return transcripts
+    titles: Dict[str, str] = {}
+    child_ids: set[str] = set()
+    for thread in threads:
+        is_child = bool(thread.get("parentThreadId"))
+        title = str(thread.get("name") or "").strip()
+        for key in (thread.get("id"), thread.get("sessionId")):
+            if key:
+                normalized = str(key)
+                if is_child:
+                    child_ids.update({normalized, normalized[-8:]})
+                elif title:
+                    titles[normalized] = title
+                    titles[normalized[-8:]] = title
+    output = []
+    for transcript in transcripts:
+        item = dict(transcript)
+        task_id = str(item.get("id") or "")
+        if task_id in child_ids or task_id[-8:] in child_ids:
+            continue
+        title = titles.get(task_id) or titles.get(task_id[-8:])
+        if title:
+            item["title"] = title[:36]
+        output.append(item)
+    return output
+
+
 def merge_sessions(
     hooks: Dict[str, Dict[str, Any]],
     threads: List[Dict[str, Any]],
     expose_titles: bool,
     stale_seconds: int,
+    waiting_stale_seconds: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     now = int(time.time())
+    waiting_ttl = max(
+        60,
+        int(stale_seconds if waiting_stale_seconds is None else waiting_stale_seconds),
+    )
     by_id: Dict[str, Dict[str, Any]] = {}
     for thread in threads:
         for key in (thread.get("id"), thread.get("sessionId")):
@@ -341,6 +385,17 @@ def merge_sessions(
         if status in ("working", "waiting_approval") and now - last_event_at > stale_seconds:
             status = "stale"
         thread = by_id.get(session_id, {})
+        if thread.get("parentThreadId"):
+            continue
+        if status == "waiting_input":
+            # A question-like final response is only actionable while the task
+            # is still loaded by Codex and the receipt is recent. Persisted
+            # hook files otherwise resurrect old prompts after Bridge restarts.
+            runtime_status = _thread_status_type(thread)
+            expired = last_event_at <= 0 or now - last_event_at > waiting_ttl
+            inactive = not thread or runtime_status in {"notLoaded", "systemError"}
+            if expired or inactive:
+                status = "idle"
         output.append(
             {
                 "id": session_id[-8:],
@@ -502,8 +557,12 @@ class CodexMonitor(threading.Thread):
             sessions = merge_sessions(
                 hook_sessions,
                 threads,
-                bool(self.config.get("expose_titles", False)),
+                bool(
+                    self.config.get("expose_titles", False)
+                    or self.config.get("expose_transcript", False)
+                ),
                 int(self.config.get("working_stale_seconds", 21600)),
+                int(self.config.get("waiting_input_stale_seconds", 21600)),
             )
             # Desktop Codex writes task_started/task_complete into its local
             # JSONL even when lifecycle hooks do not fire. Keep using that
@@ -525,8 +584,11 @@ class CodexMonitor(threading.Thread):
             if not raw_limits and limits.get("rateLimits"):
                 raw_limits = {str(limits["rateLimits"].get("limitId") or "codex"): limits["rateLimits"]}
             formatted_limits = format_rate_limits(raw_limits)
-            transcripts = self._transcripts.snapshots(
-                bool(self.config.get("expose_transcript", False))
+            expose_transcript = bool(self.config.get("expose_transcript", False))
+            transcripts = apply_thread_titles(
+                self._transcripts.snapshots(expose_transcript),
+                threads,
+                expose_transcript,
             )
             results = hook_completion_results(
                 hook_sessions,

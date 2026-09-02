@@ -73,6 +73,34 @@ class TranscriptTests(unittest.TestCase):
             self._write(path, rows)
             self.assertEqual(len(tracker.snapshots(True)), 1)
 
+    def test_codex_child_agent_is_not_exposed_as_a_user_session(self):
+        stamp = datetime.now(timezone.utc).isoformat()
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "today" / "child.jsonl"
+            self._write(
+                path,
+                [
+                    {
+                        "timestamp": stamp,
+                        "type": "session_meta",
+                        "payload": {
+                            "id": "child-12345678",
+                            "parent_thread_id": "parent-thread",
+                        },
+                    },
+                    {"timestamp": stamp, "type": "event_msg", "payload": {"type": "task_started"}},
+                    {
+                        "timestamp": stamp,
+                        "type": "event_msg",
+                        "payload": {"type": "user_message", "message": "delegated instruction"},
+                    },
+                ],
+            )
+
+            self.assertEqual(
+                LocalCodexTranscripts(root, stale_seconds=300).snapshots(True), []
+            )
+
     def test_claude_filters_thinking_tools_and_tool_results(self):
         stamp = datetime.now(timezone.utc).isoformat()
         with tempfile.TemporaryDirectory() as root:
@@ -132,6 +160,40 @@ class TranscriptTests(unittest.TestCase):
             serialized = json.dumps(result)
             self.assertNotIn("private", serialized)
             self.assertNotIn("secret", serialized)
+
+    def test_claude_prefers_custom_or_ai_title_over_first_prompt(self):
+        stamp = datetime.now(timezone.utc).isoformat()
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "project" / "session.jsonl"
+            rows = [
+                {
+                    "timestamp": stamp,
+                    "type": "user",
+                    "sessionId": "claude-87654321",
+                    "message": {"content": "这是第一句话"},
+                },
+                {
+                    "type": "ai-title",
+                    "sessionId": "claude-87654321",
+                    "aiTitle": "AI 自动标题",
+                },
+                {
+                    "type": "custom-title",
+                    "sessionId": "claude-87654321",
+                    "customTitle": "Alice 的任务标题",
+                },
+                {
+                    "type": "ai-title",
+                    "sessionId": "claude-87654321",
+                    "aiTitle": "较晚但不应覆盖的 AI 标题",
+                },
+            ]
+            self._write(path, rows)
+            tracker = LocalClaudeTranscripts(root, stale_seconds=300)
+
+            result = tracker.snapshots(True)
+
+            self.assertEqual(result[0]["title"], "Alice 的任务标题")
 
     def test_completed_today_exposes_only_finished_visible_tasks(self):
         stamp = datetime.now(timezone.utc).isoformat()

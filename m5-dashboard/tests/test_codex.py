@@ -8,6 +8,7 @@ from unittest import mock
 
 from bridge.codex_client import (
     CodexMonitor,
+    apply_thread_titles,
     collect_local_daily_usage,
     format_rate_limits,
     hook_completion_results,
@@ -80,6 +81,57 @@ class CodexMergeTests(unittest.TestCase):
         threads = [{"id": "thr_123", "name": "Dashboard task"}]
         result = merge_sessions(sessions, threads, True, 10**12)
         self.assertEqual(result[0]["title"], "Dashboard task")
+
+    def test_waiting_input_must_be_recent_and_loaded(self):
+        sessions = {
+            "thr_live": {"status": "waiting_input", "last_event_at": 9_900},
+            "thr_unloaded": {"status": "waiting_input", "last_event_at": 9_900},
+            "thr_expired": {"status": "waiting_input", "last_event_at": 8_000},
+        }
+        threads = [
+            {"id": "thr_live", "status": {"type": "idle"}},
+            {"id": "thr_unloaded", "status": {"type": "notLoaded"}},
+            {"id": "thr_expired", "status": {"type": "active", "activeFlags": []}},
+        ]
+        with mock.patch("bridge.codex_client.time.time", return_value=10_000):
+            result = merge_sessions(
+                sessions, threads, False, stale_seconds=1_000,
+                waiting_stale_seconds=600,
+            )
+
+        statuses = {row["id"]: row["status"] for row in result}
+        self.assertEqual(statuses["thr_live"], "waiting_input")
+        self.assertEqual(statuses["unloaded"], "idle")
+        self.assertEqual(statuses["_expired"], "idle")
+
+    def test_codex_transcript_prefers_user_facing_task_title(self):
+        transcripts = [{"id": "12345678", "title": "第一句话", "messages": []}]
+        threads = [
+            {
+                "id": "thr-12345678",
+                "name": "修复等待确认恢复",
+                "preview": "第一句话",
+            }
+        ]
+        self.assertEqual(
+            apply_thread_titles(transcripts, threads, True)[0]["title"],
+            "修复等待确认恢复",
+        )
+        self.assertEqual(
+            apply_thread_titles(transcripts, threads, False)[0]["title"],
+            "第一句话",
+        )
+
+    def test_codex_transcript_hides_child_agents_from_the_watch(self):
+        transcripts = [{"id": "12345678", "title": "delegated prompt"}]
+        threads = [
+            {
+                "id": "child-12345678",
+                "name": "delegated prompt",
+                "parentThreadId": "parent-thread",
+            }
+        ]
+        self.assertEqual(apply_thread_titles(transcripts, threads, True), [])
 
     def test_actionable_sessions_sort_first(self):
         sessions = {

@@ -123,6 +123,7 @@
     "usage_refresh_seconds": 60,
     "threads_refresh_seconds": 5,
     "working_stale_seconds": 21600,
+    "waiting_input_stale_seconds": 21600,
     "local_activity_stale_seconds": 1800,
     "expose_titles": false,
     "expose_transcript": false,
