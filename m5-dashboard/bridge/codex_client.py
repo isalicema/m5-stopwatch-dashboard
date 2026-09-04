@@ -365,8 +365,10 @@ def merge_sessions(
     expose_titles: bool,
     stale_seconds: int,
     waiting_stale_seconds: Optional[int] = None,
+    missing_thread_grace_seconds: int = 30,
 ) -> List[Dict[str, Any]]:
     now = int(time.time())
+    missing_thread_grace = max(5, int(missing_thread_grace_seconds))
     waiting_ttl = max(
         60,
         int(stale_seconds if waiting_stale_seconds is None else waiting_stale_seconds),
@@ -382,16 +384,28 @@ def merge_sessions(
     ):
         status = str(session.get("status") or "idle")
         last_event_at = int(session.get("last_event_at") or 0)
-        if status in ("working", "waiting_approval") and now - last_event_at > stale_seconds:
-            status = "stale"
         thread = by_id.get(session_id, {})
         if thread.get("parentThreadId"):
             continue
+        runtime_status = _thread_status_type(thread)
+        event_age = now - last_event_at if last_event_at > 0 else missing_thread_grace + 1
+        if status in ("working", "waiting_approval"):
+            # Hooks can survive a task that Codex has already unloaded or
+            # removed. Give a freshly-created task a short inventory sync
+            # window, then trust thread/list over the persisted hook receipt.
+            runtime_inactive = not thread or runtime_status in {
+                "idle",
+                "notLoaded",
+                "systemError",
+            }
+            if runtime_inactive and event_age > missing_thread_grace:
+                status = "idle"
+            elif event_age > stale_seconds:
+                status = "stale"
         if status == "waiting_input":
             # A question-like final response is only actionable while the task
             # is still loaded by Codex and the receipt is recent. Persisted
             # hook files otherwise resurrect old prompts after Bridge restarts.
-            runtime_status = _thread_status_type(thread)
             expired = last_event_at <= 0 or now - last_event_at > waiting_ttl
             inactive = not thread or runtime_status in {"notLoaded", "systemError"}
             if expired or inactive:
@@ -563,6 +577,7 @@ class CodexMonitor(threading.Thread):
                 ),
                 int(self.config.get("working_stale_seconds", 21600)),
                 int(self.config.get("waiting_input_stale_seconds", 21600)),
+                int(self.config.get("missing_thread_grace_seconds", 30)),
             )
             # Desktop Codex writes task_started/task_complete into its local
             # JSONL even when lifecycle hooks do not fire. Keep using that

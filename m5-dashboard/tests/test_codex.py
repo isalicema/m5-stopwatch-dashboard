@@ -139,11 +139,44 @@ class CodexMergeTests(unittest.TestCase):
             "thr_work": {"status": "working", "last_event_at": 100},
             "thr_approval": {"status": "waiting_approval", "last_event_at": 50},
         }
-        result = merge_sessions(sessions, [], False, 10**12)
+        threads = [
+            {"id": "thr_work", "status": {"type": "active"}},
+            {"id": "thr_approval", "status": {"type": "active"}},
+        ]
+        result = merge_sessions(sessions, threads, False, 10**12)
         self.assertEqual(
             [row["status"] for row in result],
             ["waiting_approval", "working", "idle"],
         )
+
+    def test_missing_or_unloaded_working_hook_is_not_reported_as_stale(self):
+        sessions = {
+            "thr_missing": {"status": "working", "last_event_at": 9_900},
+            "thr_unloaded": {"status": "working", "last_event_at": 9_900},
+            "thr_idle": {"status": "waiting_approval", "last_event_at": 9_900},
+            "thr_fresh": {"status": "working", "last_event_at": 9_990},
+            "thr_stalled": {"status": "working", "last_event_at": 9_000},
+        }
+        threads = [
+            {"id": "thr_unloaded", "status": {"type": "notLoaded"}},
+            {"id": "thr_idle", "status": {"type": "idle"}},
+            {"id": "thr_stalled", "status": {"type": "active"}},
+        ]
+        with mock.patch("bridge.codex_client.time.time", return_value=10_000):
+            result = merge_sessions(
+                sessions,
+                threads,
+                False,
+                stale_seconds=300,
+                missing_thread_grace_seconds=30,
+            )
+
+        statuses = {row["id"]: row["status"] for row in result}
+        self.assertEqual(statuses["_missing"], "idle")
+        self.assertEqual(statuses["unloaded"], "idle")
+        self.assertEqual(statuses["thr_idle"], "idle")
+        self.assertEqual(statuses["hr_fresh"], "working")
+        self.assertEqual(statuses["_stalled"], "stale")
 
     def test_flattens_primary_and_secondary_rate_windows(self):
         result = format_rate_limits(

@@ -126,6 +126,7 @@ def _normalize_installed_config(p: Dict[str, Path]) -> None:
     typeless.setdefault("startup_delay_seconds", 1.0)
     codex = config.setdefault("codex", {})
     codex["hook_state_path"] = str(p["target"] / "codex_hooks.json")
+    codex.setdefault("missing_thread_grace_seconds", 30)
     # Keep transcript sharing opt-in. A copied package must not silently widen
     # what this Mac exposes to the dashboard.
     codex.setdefault("expose_transcript", False)
