@@ -112,8 +112,9 @@ class AppShellTests(unittest.TestCase):
         self.assertIn("kFastPixelsPerMinute = 12", self.logic)
         self.assertNotIn("FreeSans", settings_page)
 
-    def test_power_short_sleeps_double_opens_launcher_and_usb_hold_is_reserved(self):
+    def test_power_short_sleeps_double_opens_launcher_and_data_usb_hold_is_reserved(self):
         normalized_logic = " ".join(self.interaction_logic.split())
+        normalized_source = " ".join(self.source.split())
         self.assertIn("DashboardPowerAction::toggleScreen", self.source)
         self.assertIn("DashboardPowerAction::openLauncher", self.source)
         self.assertIn("DashboardPowerAction::beginPowerOffHold", self.source)
@@ -124,7 +125,15 @@ class AppShellTests(unittest.TestCase):
             "kPowerButtonDoubleClickMs, kPowerButtonHoldPreviewMs,",
             self.source,
         )
-        self.assertIn("kPowerButtonPowerOffMs, deviceUsbConnected", self.source)
+        self.assertIn(
+            "kPowerButtonPowerOffMs, usbDownloadModeReserved()",
+            normalized_source,
+        )
+        self.assertIn(
+            "return deviceVbusPresent && usbAudioReady && tud_mounted();",
+            self.source,
+        )
+        self.assertIn("return deviceVbusPresent;", self.source)
         self.assertIn('canvas.drawString("KEEP HOLDING", 225, 331)', self.source)
         self.assertIn('canvas.drawString("RELEASE TO CANCEL", 225, 353)', self.source)
         self.assertIn("M5.Power.getVBUSVoltage()", self.source)

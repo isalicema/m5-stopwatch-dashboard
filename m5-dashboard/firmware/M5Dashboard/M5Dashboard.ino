@@ -1404,6 +1404,20 @@ void stopVoiceForStandby() {
 #endif
 }
 
+bool usbDownloadModeReserved() {
+#if defined(M5DASH_USB_AUDIO)
+  // VBUS alone only means that external power is present. A wall charger or
+  // power bank must not steal the animated shutdown gesture. Reserve the
+  // PMIC's USB download/recovery hold only after a data host has actually
+  // enumerated the TinyUSB device.
+  return deviceVbusPresent && usbAudioReady && tud_mounted();
+#else
+  // The non-TinyUSB build cannot distinguish a data host from a charger, so
+  // retain the conservative recovery behavior there.
+  return deviceVbusPresent;
+#endif
+}
+
 void setScreenLocked(bool locked) {
   if (screenLocked == locked) return;
   screenLocked = locked;
@@ -1465,7 +1479,7 @@ void updatePowerButton() {
   DashboardPowerAction action = updateDashboardPowerButton(
       powerButtonState, pressed, millis(), kPowerButtonShortPressMaxMs,
       kPowerButtonDoubleClickMs, kPowerButtonHoldPreviewMs,
-      kPowerButtonPowerOffMs, deviceUsbConnected);
+      kPowerButtonPowerOffMs, usbDownloadModeReserved());
   if (action == DashboardPowerAction::toggleScreen) {
     setScreenLocked(!screenLocked);
   } else if (action == DashboardPowerAction::openLauncher) {
