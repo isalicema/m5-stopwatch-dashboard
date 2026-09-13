@@ -16,6 +16,54 @@ inline bool dashboardUsbPairingTokenValid(const char *token,
   return true;
 }
 
+// A transient permission request can briefly surface as `waiting` even when
+// the desktop is allowed to approve it automatically.  Treat waiting as an
+// alert candidate first, and only notify after a later fresh state snapshot
+// confirms that the same wait has persisted for the configured delay.
+struct DashboardWaitingAlertModel {
+  int candidateCount = 0;
+  int notifiedCount = 0;
+  uint32_t candidateSince = 0;
+};
+
+inline void dashboardWaitingAlertSeed(DashboardWaitingAlertModel &model,
+                                      int currentCount) {
+  model = DashboardWaitingAlertModel();
+  model.notifiedCount = currentCount > 0 ? currentCount : 0;
+}
+
+inline bool dashboardWaitingAlertUpdate(DashboardWaitingAlertModel &model,
+                                        int currentCount, uint32_t now,
+                                        uint32_t delayMs) {
+  if (currentCount <= 0) {
+    model = DashboardWaitingAlertModel();
+    return false;
+  }
+
+  if (model.notifiedCount > currentCount) {
+    model.notifiedCount = currentCount;
+  }
+  if (currentCount <= model.notifiedCount) {
+    model.candidateCount = 0;
+    model.candidateSince = 0;
+    return false;
+  }
+
+  if (model.candidateCount != currentCount) {
+    model.candidateCount = currentCount;
+    model.candidateSince = now;
+    return false;
+  }
+  if (static_cast<uint32_t>(now - model.candidateSince) < delayMs) {
+    return false;
+  }
+
+  model.notifiedCount = currentCount;
+  model.candidateCount = 0;
+  model.candidateSince = 0;
+  return true;
+}
+
 // The stopwatch interaction follows M5Stack's MIT-licensed StopWatch UserDemo:
 // stopped: A no-op / B start; running: A lap / B pause;
 // paused: A reset / B resume.

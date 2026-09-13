@@ -4,6 +4,7 @@ import glob
 import hmac
 import json
 import os
+import re
 import select
 import termios
 import threading
@@ -133,8 +134,15 @@ def build_response(snapshot: Dict[str, Any]) -> bytes:
 
 
 def serial_ports() -> list[str]:
-    patterns = ("/dev/cu.usbmodem*", "/dev/cu.usbserial*", "/dev/cu.SLAB_USBtoUART*")
-    return sorted({item for pattern in patterns for item in glob.glob(pattern)})
+    # The StopWatch UAC firmware declares USB.serialNumber("M5DASHMIC3").
+    # macOS appends a numeric interface suffix (observed: M5DASHMIC31).
+    # Filter BEFORE opening: even a passive open can reset another ESP32 or
+    # consume its serial data. Never probe generic CDC/USB-UART/ROM ports.
+    # This selects our firmware; it is not a substitute for protocol auth.
+    return sorted({
+        port for port in glob.glob("/dev/cu.usbmodemM5DASHMIC3*")
+        if re.fullmatch(r"/dev/cu\.usbmodemM5DASHMIC3[0-9]*", port)
+    })
 
 
 def _configure_port(fd: int) -> None:

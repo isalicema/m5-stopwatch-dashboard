@@ -26,10 +26,46 @@ from bridge.usb_serial import (
     parse_diagnostic,
     parse_request,
     parse_action_request,
+    serial_ports,
 )
 
 
 class UsbSerialProtocolTests(unittest.TestCase):
+    def test_discovery_only_selects_known_dashboard_firmware(self):
+        ports = [
+            "/dev/cu.usbmodem2101",  # Faces/CoreS3 or ROM download mode
+            "/dev/cu.usbserial-123", "/dev/cu.SLAB_USBtoUART",
+            "/dev/cu.usbmodemM5DASHMIC31", "/dev/cu.usbmodemM5DASHMIC32",
+            "/dev/cu.usbmodemM5DASHMIC31",  # duplicate enumeration
+            "/dev/cu.usbmodemM5DASHMIC3-other",  # not a numeric suffix
+        ]
+        with mock.patch("bridge.usb_serial.glob.glob", return_value=ports) as scan:
+            self.assertEqual(serial_ports(), [
+                "/dev/cu.usbmodemM5DASHMIC31", "/dev/cu.usbmodemM5DASHMIC32",
+            ])
+        scan.assert_called_once_with("/dev/cu.usbmodemM5DASHMIC3*")
+
+    def test_no_dashboard_does_not_open_other_serial_devices(self):
+        responder = UsbSerialResponder(lambda: {"ok": True}, "secret-token")
+        # Exercise the actual discovery -> run path, not just a predicate.
+        def end_scan(_timeout):
+            responder.stop()
+        with mock.patch("bridge.usb_serial.glob.glob", return_value=[
+            "/dev/cu.usbmodem2101", "/dev/cu.usbserial-123",
+        ]), mock.patch("bridge.usb_serial.os.open") as opened, mock.patch.object(
+            responder._stop_event, "wait", side_effect=end_scan
+        ):
+            responder.run()
+        opened.assert_not_called()
+
+    def test_unknown_port_before_dashboard_cannot_block_connection(self):
+        responder = UsbSerialResponder(lambda: {"ok": True}, "secret-token")
+        with mock.patch("bridge.usb_serial.glob.glob", return_value=[
+            "/dev/cu.usbmodem2101", "/dev/cu.usbmodemM5DASHMIC31",
+        ]), mock.patch.object(responder, "_serve", side_effect=lambda _: responder.stop()) as serve:
+            responder.run()
+        serve.assert_called_once_with("/dev/cu.usbmodemM5DASHMIC31")
+
     def test_upstream_snapshot_requests_device_view_and_falls_back_locally(self):
         source = UsbSnapshotSource(
             lambda: {"ok": True, "device_label": "iMac"},

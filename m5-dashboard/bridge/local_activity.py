@@ -90,10 +90,34 @@ class LocalCodexActivity(_JsonlActivityTracker):
     """Use Codex's durable task lifecycle records when notification hooks are absent."""
 
     def _consume(self, state: Dict[str, Any], record: Dict[str, Any], stamp: float) -> None:
+        if record.get("type") == "session_meta":
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            state["session_id"] = str(payload.get("id") or state.get("session_id") or "")
+            state["parent_thread_id"] = str(payload.get("parent_thread_id") or "")
+            return
+        if record.get("type") == "turn_context":
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            reviewer = payload.get("approvals_reviewer")
+            if reviewer is not None:
+                state["approvals_reviewer"] = str(reviewer)
+            return
         if record.get("type") != "event_msg":
             return
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
         kind = payload.get("type")
+        if kind == "thread_settings_applied":
+            thread_id = payload.get("thread_id")
+            if thread_id:
+                state["session_id"] = str(thread_id)
+            settings = (
+                payload.get("thread_settings")
+                if isinstance(payload.get("thread_settings"), dict)
+                else {}
+            )
+            reviewer = settings.get("approvals_reviewer")
+            if reviewer is not None:
+                state["approvals_reviewer"] = str(reviewer)
+            return
         if kind == "task_started":
             state.update({"state": "working", "last_event": stamp})
         elif kind == "task_complete":
@@ -110,9 +134,22 @@ class LocalCodexActivity(_JsonlActivityTracker):
             1
             for state in self._refresh()
             if state.get("state") == "working"
+            and not state.get("parent_thread_id")
             and now - max(float(state.get("last_event") or 0), float(state.get("modified") or 0))
             <= self.stale_seconds
         )
+
+    def approval_reviewers(self) -> Dict[str, str]:
+        """Return per-task approval routing without exposing task content."""
+        output: Dict[str, str] = {}
+        for state in self._refresh():
+            session_id = str(state.get("session_id") or "")
+            reviewer = str(state.get("approvals_reviewer") or "")
+            if not session_id or not reviewer or state.get("parent_thread_id"):
+                continue
+            output[session_id] = reviewer
+            output[session_id[-8:]] = reviewer
+        return output
 
 
 class LocalClaudeActivity(_JsonlActivityTracker):

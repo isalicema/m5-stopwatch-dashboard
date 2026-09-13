@@ -31,6 +31,14 @@ class CompletionLatencyTests(unittest.TestCase):
         self.assertIn("sendUsbStateRequest();", function)
         self.assertIn("if (!fetchState()) bridgeOnline = false;", function)
 
+    def test_codex_history_cannot_starve_newer_claude_completions(self):
+        start = self.source.index("void appendDashboardResults(")
+        end = self.source.index("\n}\n", start)
+        function = self.source[start:end]
+        self.assertIn("dashboardCompletionReplacementIndex", function)
+        self.assertIn("completedAt", function)
+        self.assertNotIn("dashboardResults.count >= kMaxDashboardResults", function)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,24 @@
 #include "../firmware/M5Dashboard/ota_logic.h"
 
 int main() {
+  DashboardWaitingAlertModel waitingAlert;
+  dashboardWaitingAlertSeed(waitingAlert, 1);
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 1, 8000, 5000));
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 0, 9000, 5000));
+
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 1, 10000, 5000));
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 1, 14999, 5000));
+  assert(dashboardWaitingAlertUpdate(waitingAlert, 1, 15000, 5000));
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 1, 22000, 5000));
+
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 2, 23000, 5000));
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 2, 27999, 5000));
+  assert(dashboardWaitingAlertUpdate(waitingAlert, 2, 28000, 5000));
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 0, 29000, 5000));
+
+  assert(!dashboardWaitingAlertUpdate(waitingAlert, 1, UINT32_MAX - 2000, 5000));
+  assert(dashboardWaitingAlertUpdate(waitingAlert, 1, 2999, 5000));
+
   assert(dashboardOtaSha256Valid(
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", 64));
   assert(!dashboardOtaSha256Valid(
@@ -176,6 +194,31 @@ int main() {
   assert(queueDashboardClick(click, 1000, 360) == DashboardClickAction::none);
   assert(queueDashboardClick(click, 1200, 360) == DashboardClickAction::doubleClick);
   assert(flushDashboardClick(click, 1600, 360) == DashboardClickAction::none);
+
+  // The device uses a 500 ms focus-button window so a natural double-click at
+  // 460 ms is still one End action instead of a pause followed by a resume.
+  click = {};
+  assert(queueDashboardClick(click, 1700, 500) == DashboardClickAction::none);
+  beginDashboardClickPress(click);
+  assert(queueDashboardClick(click, 2160, 500) == DashboardClickAction::doubleClick);
+
+  // The second press, rather than its release, commits the double-click. Even
+  // if a redraw or network poll delays the loop past the nominal window, a
+  // still-pending first release must not flush underneath the held press.
+  click = {};
+  assert(queueDashboardClick(click, 2000, 360) == DashboardClickAction::none);
+  beginDashboardClickPress(click);
+  assert(flushDashboardClick(click, 2500, 360) == DashboardClickAction::none);
+  assert(queueDashboardClick(click, 2700, 360) == DashboardClickAction::doubleClick);
+  assert(flushDashboardClick(click, 2800, 360) == DashboardClickAction::none);
+
+  // A genuinely late second press remains independent because a responsive
+  // loop has already delivered the first single click before that press.
+  click = {};
+  assert(queueDashboardClick(click, 3000, 360) == DashboardClickAction::none);
+  assert(flushDashboardClick(click, 3360, 360) == DashboardClickAction::singleClick);
+  beginDashboardClickPress(click);
+  assert(queueDashboardClick(click, 3500, 360) == DashboardClickAction::none);
 
   assert(dashboardHomePageDelta(0) == 0);
   for (int page = 1; page < 7; ++page) {

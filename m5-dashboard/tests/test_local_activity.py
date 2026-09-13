@@ -45,6 +45,73 @@ class LocalActivityTests(unittest.TestCase):
                 )
             self.assertEqual(tracker.active_count(), 1)
 
+    def test_codex_child_agent_is_not_a_user_facing_active_task(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "today" / "child.jsonl"
+            path.parent.mkdir(parents=True)
+            rows = [
+                {
+                    "timestamp": stamp(),
+                    "type": "session_meta",
+                    "payload": {"id": "child", "parent_thread_id": "parent"},
+                },
+                {"timestamp": stamp(), "type": "event_msg", "payload": {"type": "task_started"}},
+            ]
+            path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+            )
+
+            self.assertEqual(LocalCodexActivity(root, stale_seconds=60).active_count(), 0)
+
+    def test_codex_approval_reviewer_follows_latest_turn_settings(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "today" / "session.jsonl"
+            path.parent.mkdir(parents=True)
+            rows = [
+                {
+                    "timestamp": stamp(),
+                    "type": "session_meta",
+                    "payload": {"id": "thread-12345678"},
+                },
+                {
+                    "timestamp": stamp(),
+                    "type": "turn_context",
+                    "payload": {"approvals_reviewer": "auto_review"},
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+            )
+            tracker = LocalCodexActivity(root, stale_seconds=60)
+            self.assertEqual(
+                tracker.approval_reviewers(),
+                {
+                    "thread-12345678": "auto_review",
+                    "12345678": "auto_review",
+                },
+            )
+
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "timestamp": stamp(),
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "thread_settings_applied",
+                                "thread_id": "thread-12345678",
+                                "thread_settings": {
+                                    "approvals_reviewer": "user_review"
+                                },
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+            self.assertEqual(
+                tracker.approval_reviewers()["thread-12345678"], "user_review"
+            )
+
     def test_claude_prompt_tool_use_and_end_turn_lifecycle(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "project" / "session.jsonl"

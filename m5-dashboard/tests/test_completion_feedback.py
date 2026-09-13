@@ -102,16 +102,19 @@ class CompletionFeedbackTests(unittest.TestCase):
         self.assertIn("startTonePattern(kFocusDoneTones", self.source)
         self.assertIn("updateControlHaptic(value)", self.source)
 
-    def test_waiting_haptic_is_suppressed_when_a_task_just_completed(self):
+    def test_waiting_haptic_requires_a_persistent_fresh_state(self):
         transition_start = self.source.index("void notifyTransitions(")
         transition_end = self.source.index("\n}\n", transition_start) + 3
         transition = self.source[transition_start:transition_end]
 
-        self.assertIn("bool completionStarted", transition)
-        self.assertIn("if (!completionStarted) startVibration(190, 300)", transition)
+        self.assertIn("dashboardWaitingAlertSeed", transition)
+        self.assertIn("dashboardWaitingAlertUpdate", transition)
+        self.assertIn("kCodexWaitingAlertDelayMs = 5000", self.source)
+        self.assertIn("startVibration(190, 300)", transition)
         self.assertIn("startTonePattern(kCodexWaitingTones", transition)
-        self.assertIn("bool completionStarted = updateCompletionResults();", self.source)
-        self.assertIn("notifyTransitions(oldTickTick, oldCodex, hadData, completionStarted);", self.source)
+        self.assertNotIn("codex.waiting > oldCodex.waiting", transition)
+        self.assertNotIn("completionStarted", transition)
+        self.assertIn("notifyTransitions(oldTickTick, hadData);", self.source)
 
 
 if __name__ == "__main__":

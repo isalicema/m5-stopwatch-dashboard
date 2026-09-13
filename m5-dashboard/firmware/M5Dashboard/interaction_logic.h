@@ -398,6 +398,7 @@ inline bool dashboardShakeDetected(bool previousReady, float deltaX, float delta
 
 struct DashboardClickButtonState {
   bool singlePending = false;
+  bool secondPressPending = false;
   uint32_t releasedAt = 0;
 };
 
@@ -405,14 +406,26 @@ inline int dashboardHomePageDelta(int currentPage) {
   return currentPage > 0 ? -currentPage : 0;
 }
 
+inline void beginDashboardClickPress(DashboardClickButtonState &state) {
+  // If the first release is still pending when a physical second press is
+  // observed, prefer the double-click. In a responsive loop an actually late
+  // first click has already been flushed at the deadline. This also preserves
+  // the user's real press order when a redraw or network poll delays the loop
+  // beyond the nominal double-click window.
+  state.secondPressPending = state.singlePending;
+}
+
 inline DashboardClickAction queueDashboardClick(DashboardClickButtonState &state,
                                                  uint32_t now,
                                                  uint32_t doubleClickMs) {
-  if (state.singlePending &&
-      static_cast<uint32_t>(now - state.releasedAt) < doubleClickMs) {
+  if (state.secondPressPending ||
+      (state.singlePending &&
+       static_cast<uint32_t>(now - state.releasedAt) < doubleClickMs)) {
     state.singlePending = false;
+    state.secondPressPending = false;
     return DashboardClickAction::doubleClick;
   }
+  state.secondPressPending = false;
   state.singlePending = true;
   state.releasedAt = now;
   return DashboardClickAction::none;
@@ -421,7 +434,7 @@ inline DashboardClickAction queueDashboardClick(DashboardClickButtonState &state
 inline DashboardClickAction flushDashboardClick(DashboardClickButtonState &state,
                                                  uint32_t now,
                                                  uint32_t doubleClickMs) {
-  if (state.singlePending &&
+  if (state.singlePending && !state.secondPressPending &&
       static_cast<uint32_t>(now - state.releasedAt) >= doubleClickMs) {
     state.singlePending = false;
     return DashboardClickAction::singleClick;

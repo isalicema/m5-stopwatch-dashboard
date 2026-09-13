@@ -221,13 +221,30 @@ class QuotaRingTests(unittest.TestCase):
         self.assertIn("ticktick.stopwatchElapsed = currentStopwatchElapsed();", optimistic)
         self.assertIn('ticktick.stopwatchState = "paused";', optimistic)
         self.assertIn('ticktick.stopwatchState = "running";', optimistic)
+        self.assertIn('ticktick.stopwatchState = "ending";', optimistic)
         self.assertIn("ticktick.countdownRemaining = currentCountdownRemaining();", optimistic)
 
         action = function_source(self.source, "void performTickTickAction(")
+        self.assertIn("timerEnding(ticktick.stopwatchState)", action)
+        self.assertIn("timerEnding(ticktick.countdownState)", action)
         self.assertLess(
             action.index("applyOptimisticTickTickAction(action);"),
             action.index("sendUsbDashboardAction(action);"),
         )
+        self.assertLess(
+            action.index('if (action.endsWith("end")) drawCurrentPage();'),
+            action.index("sendUsbDashboardAction(action);"),
+        )
+
+    def test_focus_page_renders_an_explicit_ending_state(self):
+        focus = function_source(self.source, "void drawFocusPage(")
+        self.assertIn("timerEnding", focus)
+        self.assertIn('ending ? "正在"', focus)
+        self.assertIn('ending ? "结束"', focus)
+
+        actions = function_source(self.source, "void drawFocusActions(")
+        self.assertIn('ending ? "等待"', actions)
+        self.assertIn('ending ? "结束中"', actions)
 
     def test_running_focus_timer_preserves_its_anchor_and_uses_a_partial_patch(self):
         apply_state = function_source(self.source, "bool applyDashboardState(")

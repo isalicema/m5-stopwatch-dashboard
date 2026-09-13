@@ -16,6 +16,12 @@
 
 ## 数据路径
 
+Mac Bridge 的 USB 自动发现仅连接当前 StopWatch UAC 固件的
+`/dev/cu.usbmodemM5DASHMIC3…` 端口（USB 序列号 `M5DASHMIC3`，后缀为数字）。
+它不会打开 Faces/CoreS3、普通 USB 串口或 ROM 下载端口。旧固件若未声明该标识，
+USB 不会自动连接；仍可使用局域网 HTTP。此筛选不替代现有 Token 校验，
+也不表示已经支持两台 StopWatch 同时走 USB。
+
 StopWatch 默认通过物理 USB CDC 访问本机 Dashboard 桥接，也可选择带 Token 的局域网
 HTTP。Dashboard 再复用已经由
 [M5StickS3 TickTick Focus Bridge](https://github.com/isalicema/m5stick-ticktick-focus)

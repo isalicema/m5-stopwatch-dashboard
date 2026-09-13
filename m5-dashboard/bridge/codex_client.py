@@ -365,6 +365,7 @@ def merge_sessions(
     expose_titles: bool,
     stale_seconds: int,
     waiting_stale_seconds: Optional[int] = None,
+    approval_reviewers: Optional[Dict[str, str]] = None,
     missing_thread_grace_seconds: int = 30,
 ) -> List[Dict[str, Any]]:
     now = int(time.time())
@@ -402,6 +403,15 @@ def merge_sessions(
                 status = "idle"
             elif event_age > stale_seconds:
                 status = "stale"
+        reviewer = (approval_reviewers or {}).get(session_id) or (
+            approval_reviewers or {}
+        ).get(session_id[-8:])
+        if status == "waiting_approval" and reviewer == "auto_review":
+            # "Help me approve" briefly emits PermissionRequest while Codex's
+            # own reviewer is deciding. It is still active work, not a user
+            # action item. If Codex ultimately needs the user, its final
+            # question becomes waiting_input and remains actionable below.
+            status = "working"
         if status == "waiting_input":
             # A question-like final response is only actionable while the task
             # is still loaded by Codex and the receipt is recent. Persisted
@@ -577,6 +587,7 @@ class CodexMonitor(threading.Thread):
                 ),
                 int(self.config.get("working_stale_seconds", 21600)),
                 int(self.config.get("waiting_input_stale_seconds", 21600)),
+                self._local_activity.approval_reviewers(),
                 int(self.config.get("missing_thread_grace_seconds", 30)),
             )
             # Desktop Codex writes task_started/task_complete into its local

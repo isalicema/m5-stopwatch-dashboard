@@ -190,6 +190,7 @@ struct AIUsageData {
 TickTickData ticktick;
 CodexData codex;
 CodexData claude;
+DashboardWaitingAlertModel codexWaitingAlert;
 AIUsageData aiUsage;
 TranscriptCollection codexTranscripts;
 TranscriptCollection claudeTranscripts;
@@ -445,6 +446,7 @@ constexpr ToneStep kFocusDoneTones[] = {{880, 80, 35}, {1175, 140, 0}};
 constexpr ToneStep kCountdownDoneTones[] = {
     {988, 180, 60}, {659, 420, 320}, {988, 180, 60}, {659, 780, 0}};
 constexpr ToneStep kCodexWaitingTones[] = {{1047, 120, 0}};
+constexpr uint32_t kCodexWaitingAlertDelayMs = 5000;
 constexpr ToneStep kAiScreamTones[] = {
     {988, 70, 18}, {1319, 70, 18}, {1760, 180, 30}, {2093, 220, 0}};
 constexpr ToneStep kVolumePreviewTone[] = {{1047, 70, 0}};
@@ -538,7 +540,10 @@ constexpr uint32_t kResultBallPhysicsIntervalMs = 20;
 constexpr uint32_t kResultBallFrameIntervalMs = 33;
 constexpr uint32_t kResultBallShakeCooldownMs = 180;
 constexpr uint8_t kBButtonPin = 1;  // StopWatch KEYB (blue), active low.
-constexpr uint32_t kFocusDoubleClickMs = 360;
+// Match the power button's familiar double-click cadence. 360 ms was narrow
+// enough that an ordinary A/B double-click could be split into pause + resume,
+// making End appear to do nothing even though both physical presses worked.
+constexpr uint32_t kFocusDoubleClickMs = 500;
 constexpr uint32_t kCpuHighFrequencyMhz = 240;
 constexpr uint32_t kCpuLowFrequencyMhz = 80;
 constexpr uint32_t kWifiRetryIntervalMs = 750;
@@ -1693,6 +1698,10 @@ bool timerRunning(const String &state) {
 
 bool timerPaused(const String &state) {
   return state == "paused" || state == "PAUSED";
+}
+
+bool timerEnding(const String &state) {
+  return state == "ending" || state == "ENDING";
 }
 
 int currentStopwatchElapsed() {
@@ -3455,9 +3464,9 @@ void drawFocusModeOption(int x, int width, const String &key, const String &labe
   canvas.drawString(label, x + width / 2 + 16, 307);
 }
 
-void drawFocusActions(const String &key, bool running, bool paused,
+void drawFocusActions(const String &key, bool running, bool paused, bool ending,
                       uint16_t background, uint16_t ink) {
-  String action = running ? "暂停" : paused ? "继续" : "开始";
+  String action = ending ? "等待" : running ? "暂停" : paused ? "继续" : "开始";
   const int actionCenterY = kFocusActionY + kFocusActionHeight / 2;
   const int primaryKeyX = kFocusPrimaryActionX + 26;
   const int primaryLabelX = kFocusPrimaryActionX + 108;
@@ -3479,14 +3488,16 @@ void drawFocusActions(const String &key, bool running, bool paused,
                          background, ink);
   canvas.setTextColor(ink);
   useEditorialMicro14();
-  canvas.drawString("结束", endCenterX, actionCenterY);
+  canvas.drawString(ending ? "结束中" : "结束", endCenterX, actionCenterY);
 }
 
 bool focusUsesStopwatchMode() {
   bool stopwatchActive = timerRunning(ticktick.stopwatchState) ||
-                         timerPaused(ticktick.stopwatchState);
+                         timerPaused(ticktick.stopwatchState) ||
+                         timerEnding(ticktick.stopwatchState);
   bool countdownActive = timerRunning(ticktick.countdownState) ||
-                         timerPaused(ticktick.countdownState);
+                         timerPaused(ticktick.countdownState) ||
+                         timerEnding(ticktick.countdownState);
   return stopwatchActive || !countdownActive;
 }
 
@@ -3500,6 +3511,8 @@ void drawFocusPage() {
                                : timerRunning(ticktick.countdownState);
   bool paused = stopwatchMode ? timerPaused(ticktick.stopwatchState)
                               : timerPaused(ticktick.countdownState);
+  bool ending = stopwatchMode ? timerEnding(ticktick.stopwatchState)
+                              : timerEnding(ticktick.countdownState);
   String heroValue = stopwatchMode ? formatTimerSeconds(currentStopwatchElapsed())
                                    : formatTimerSeconds(currentCountdownRemaining());
 
@@ -3508,17 +3521,21 @@ void drawFocusPage() {
   canvas.setTextDatum(middle_left);
   canvas.setTextColor(ink);
   useEditorialBold24();
-  canvas.drawString(ticktick.connected ? "专注" : "等待", kFocusStatusX,
+  canvas.drawString(ending ? "正在" : ticktick.connected ? "专注" : "等待", kFocusStatusX,
                     kFocusStatusFirstLineY);
-  canvas.drawString(!ticktick.connected ? "连接" : running ? "进行中" : paused ? "已暂停"
-                                                                       : "准备好",
+  canvas.drawString(ending ? "结束"
+                           : !ticktick.connected ? "连接"
+                           : running ? "进行中"
+                           : paused ? "已暂停"
+                                    : "准备好",
                     kFocusStatusX, kFocusStatusSecondLineY);
   canvas.fillRect(kFocusStatusX, kFocusStatusUnderlineY, 52, 4, ink);
 
   drawFocusHeroTime(heroValue, ink);
   drawFocusModeOption(52, 175, "A", "正计时", stopwatchMode, background, ink, yellow);
   drawFocusModeOption(225, 175, "B", "25分钟", !stopwatchMode, background, ink, yellow);
-  drawFocusActions(stopwatchMode ? "A" : "B", running, paused, background, ink);
+  drawFocusActions(stopwatchMode ? "A" : "B", running, paused, ending,
+                   background, ink);
   lastTickTickDrawSecond = running ? millis() / 1000 : 0;
   focusPageNeedsFullRedraw = false;
 }
@@ -3607,7 +3624,9 @@ void drawProviderEditorialFooter(const CodexData &provider, int resetMinutes,
     secondLine = "轻触图标查看详情";
   } else if (provider.waiting > 0) {
     firstLine = String(provider.waiting) + " 个任务等待确认";
-    secondLine = "请在电脑端继续";
+    secondLine = provider.firstTitle.length() > 0
+                     ? fitTextToWidth(provider.firstTitle, 224)
+                     : "请在电脑端继续";
   } else if (provider.errors > 0) {
     firstLine = "发现异常状态";
     secondLine = "请在电脑端检查";
@@ -4764,18 +4783,25 @@ void updateCenterIconAnimation() {
   // the full page compositor now remains the sole owner of frame/display I/O.
 }
 
-void notifyTransitions(const TickTickData &oldTickTick, const CodexData &oldCodex, bool hadData,
-                       bool completionStarted) {
-  if (!hadData) return;
+void notifyTransitions(const TickTickData &oldTickTick, bool hadData) {
+  if (!hadData) {
+    // Booting or reconnecting to an already-waiting task is not a new alert.
+    dashboardWaitingAlertSeed(codexWaitingAlert, codex.waiting);
+    return;
+  }
   if (timerRunning(oldTickTick.countdownState) &&
       !timerRunning(ticktick.countdownState) && ticktick.countdownRemaining == 0) {
     startVibration(170, 220);
     startTonePattern(kFocusDoneTones,
                      sizeof(kFocusDoneTones) / sizeof(kFocusDoneTones[0]));
-  } else if (codex.waiting > oldCodex.waiting) {
-    // A task can complete and immediately enter the next waiting turn in the
-    // same state update. Do not make that task-complete update vibrate.
-    if (!completionStarted) startVibration(190, 300);
+  }
+
+  // Evaluate only when a fresh dashboard snapshot arrives. This prevents a
+  // cached one-frame wait from becoming audible while auto-approval is already
+  // clearing it on the Mac.
+  if (dashboardWaitingAlertUpdate(codexWaitingAlert, codex.waiting, millis(),
+                                  kCodexWaitingAlertDelayMs)) {
+    startVibration(190, 300);
     startTonePattern(kCodexWaitingTones,
                      sizeof(kCodexWaitingTones) / sizeof(kCodexWaitingTones[0]));
   }
@@ -5046,7 +5072,7 @@ bool applyDashboardState(JsonDocument &doc) {
   appendDashboardResults(c, 'C');
   appendDashboardResults(a, 'A');
   sortDashboardResults();
-  bool completionStarted = updateCompletionResults();
+  updateCompletionResults();
 
   JsonObject w = doc["weather"];
   weather.available = w["available"] | false;
@@ -5085,7 +5111,7 @@ bool applyDashboardState(JsonDocument &doc) {
 
   haveData = true;
   lastStateAppliedAt = millis();
-  notifyTransitions(oldTickTick, oldCodex, hadData, completionStarted);
+  notifyTransitions(oldTickTick, hadData);
   bool newAiHotspot = aiHotspot.active &&
                       (!oldAiHotspot.active || aiHotspot.id != oldAiHotspot.id);
   if (newAiHotspot && (screenLocked || appMode == DashboardAppMode::dashboard)) {
@@ -5497,13 +5523,17 @@ void applyOptimisticTickTickAction(const String &action) {
     ticktick.syncedAt = now;
     return;
   }
-  if (action == "stopwatch-end" && timerRunning(ticktick.stopwatchState)) {
+  if (action == "stopwatch-end" &&
+      (timerRunning(ticktick.stopwatchState) ||
+       timerPaused(ticktick.stopwatchState))) {
     ticktick.stopwatchElapsed = currentStopwatchElapsed();
-    ticktick.stopwatchState = "paused";
+    ticktick.stopwatchState = "ending";
     ticktick.syncedAt = now;
-  } else if (action == "countdown-end" && timerRunning(ticktick.countdownState)) {
+  } else if (action == "countdown-end" &&
+             (timerRunning(ticktick.countdownState) ||
+              timerPaused(ticktick.countdownState))) {
     ticktick.countdownRemaining = currentCountdownRemaining();
-    ticktick.countdownState = "paused";
+    ticktick.countdownState = "ending";
     ticktick.syncedAt = now;
   }
 }
@@ -5512,6 +5542,15 @@ void performTickTickAction(const String &action) {
   requireHighPerformance();
   currentPage = 1;
   overlayMode = OverlayMode::none;
+  // A long-session end can still be confirming inside TickTick after the
+  // watch's HTTP timeout. Ignore duplicate focus actions until the bridge
+  // publishes the authoritative result; otherwise a second tap could start a
+  // new timer while the previous session is still closing.
+  if (timerEnding(ticktick.stopwatchState) ||
+      timerEnding(ticktick.countdownState)) {
+    drawCurrentPage();
+    return;
+  }
   startVibration(action.endsWith("end") ? 90 : 55, action.endsWith("end") ? 55 : 28);
   // Freeze/resume the visible timer at the button event. The USB/HTTP action
   // can take several seconds while TickTick's UI command is confirmed; the
@@ -5522,6 +5561,11 @@ void performTickTickAction(const String &action) {
   // normal low-frequency dashboard polling interval.
   focusReconcileUntilAt = millis() + kFocusReconcileWindowMs;
   lastFetchAt = 0;
+  // Ending a long TickTick focus can require a pause transition and a native
+  // duration-confirmation dialog. Paint the pending state before the blocking
+  // Wi-Fi request (or asynchronous USB request) so the watch acknowledges the
+  // gesture immediately instead of looking frozen during those checks.
+  if (action.endsWith("end")) drawCurrentPage();
   if (usbBridgeOnline) {
     sendUsbDashboardAction(action);
   } else {
@@ -7003,6 +7047,7 @@ void beginBButtonPress() {
   bButtonConsumed = false;
   bButtonLongTriggered = false;
   bButtonPressedAt = millis();
+  beginDashboardClickPress(bClickState);
   requireHighPerformance();
 }
 
@@ -7018,6 +7063,7 @@ void beginAButtonPress() {
   aButtonConsumed = false;
   aButtonLongTriggered = false;
   aButtonPressedAt = millis();
+  beginDashboardClickPress(aClickState);
   requireHighPerformance();
 }
 
@@ -7236,6 +7282,11 @@ void loop() {
     return;
   }
 
+  bool aButtonPressed = M5.BtnA.isPressed();
+  if (aButtonPressed && !aButtonTracking) beginAButtonPress();
+  bool bButtonPressed = readBButtonPressed();
+  if (bButtonPressed && !bButtonTracking) beginBButtonPress();
+
   DashboardClickAction aPendingAction =
       flushDashboardClick(aClickState, millis(), kFocusDoubleClickMs);
   DashboardClickAction bPendingAction =
@@ -7247,15 +7298,12 @@ void loop() {
     performTickTickAction("countdown-click");
   }
 
-  bool aButtonPressed = M5.BtnA.isPressed();
-  if (aButtonPressed && !aButtonTracking) beginAButtonPress();
-  bool bButtonPressed = readBButtonPressed();
-  if (bButtonPressed && !bButtonTracking) beginBButtonPress();
-
   bool bothButtons = aButtonPressed && bButtonPressed;
   if (bothButtons) {
     configChordActive = true;
     aButtonConsumed = true;
+    aClickState = DashboardClickButtonState();
+    bClickState = DashboardClickButtonState();
   }
   if (bothButtons && !configHoldTriggered &&
       M5.BtnA.pressedFor(2500) && millis() - bButtonPressedAt >= 2500) {
@@ -7281,6 +7329,7 @@ void loop() {
         static_cast<uint32_t>(millis() - bButtonPressedAt) >= kBButtonLongPressMs) {
       bButtonLongTriggered = true;
       bButtonConsumed = true;
+      bClickState = DashboardClickButtonState();
       returnToClockPage();
     }
     if (!bButtonPressed && bButtonTracking) {
@@ -7297,6 +7346,7 @@ void loop() {
         static_cast<uint32_t>(millis() - aButtonPressedAt) >= kAButtonLongPressMs) {
       aButtonLongTriggered = true;
       aButtonConsumed = true;
+      aClickState = DashboardClickButtonState();
       if (!wifiReconnectPaused) wifiPickerMessage = "";
       openWifiPicker();
     }

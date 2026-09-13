@@ -140,6 +140,13 @@ class FeaturePageTests(unittest.TestCase):
         self.assertIn('canvas.drawString(value, x + 103, y + 34);', self.source)
         self.assertNotIn('canvas.drawString("亿", left + numberWidth, y + 34);', self.source)
 
+    def test_waiting_provider_footer_identifies_the_task(self):
+        self.assertIn(
+            "provider.firstTitle.length() > 0\n"
+            "                     ? fitTextToWidth(provider.firstTitle, 224)",
+            self.source,
+        )
+
     def test_clock_shortcuts_do_not_overlap_the_information_pills(self):
         self.assertIn("constexpr int kClockActionTouchY = 336;", self.interaction)
         self.assertIn("constexpr int kClockActionTouchHeight = 64;", self.interaction)

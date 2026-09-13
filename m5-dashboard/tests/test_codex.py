@@ -149,6 +149,33 @@ class CodexMergeTests(unittest.TestCase):
             ["waiting_approval", "working", "idle"],
         )
 
+    def test_auto_review_permission_request_remains_working(self):
+        sessions = {
+            "thr_auto": {"status": "waiting_approval", "last_event_at": 100},
+            "thr_manual": {"status": "waiting_approval", "last_event_at": 90},
+            "thr_question": {"status": "waiting_input", "last_event_at": 80},
+        }
+        threads = [
+            {"id": "thr_auto", "status": {"type": "active"}},
+            {"id": "thr_manual", "status": {"type": "active"}},
+            {"id": "thr_question", "status": {"type": "idle"}},
+        ]
+        result = merge_sessions(
+            sessions,
+            threads,
+            False,
+            10**12,
+            approval_reviewers={
+                "thr_auto": "auto_review",
+                "thr_manual": "user_review",
+            },
+        )
+
+        statuses = {row["id"]: row["status"] for row in result}
+        self.assertEqual(statuses["thr_auto"], "working")
+        self.assertEqual(statuses["r_manual"], "waiting_approval")
+        self.assertEqual(statuses["question"], "waiting_input")
+
     def test_missing_or_unloaded_working_hook_is_not_reported_as_stale(self):
         sessions = {
             "thr_missing": {"status": "working", "last_event_at": 9_900},
