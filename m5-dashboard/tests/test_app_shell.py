@@ -116,13 +116,24 @@ class AppShellTests(unittest.TestCase):
         normalized_logic = " ".join(self.interaction_logic.split())
         self.assertIn("DashboardPowerAction::toggleScreen", self.source)
         self.assertIn("DashboardPowerAction::openLauncher", self.source)
+        self.assertIn("DashboardPowerAction::beginPowerOffHold", self.source)
+        self.assertIn("DashboardPowerAction::cancelPowerOffHold", self.source)
         self.assertIn("setScreenLocked(!screenLocked);", self.source)
         self.assertIn("enterAppLauncher();", self.source)
         self.assertIn(
-            "kPowerButtonDoubleClickMs, kPowerButtonLongPressMs, deviceUsbConnected",
+            "kPowerButtonDoubleClickMs, kPowerButtonHoldPreviewMs,",
             self.source,
         )
+        self.assertIn("kPowerButtonPowerOffMs, deviceUsbConnected", self.source)
+        self.assertIn('canvas.drawString("KEEP HOLDING", 225, 331)', self.source)
+        self.assertIn('canvas.drawString("RELEASE TO CANCEL", 225, 353)', self.source)
         self.assertIn("M5.Power.getVBUSVoltage()", self.source)
+        self.assertIn(
+            "heldMs >= holdPreviewMs", normalized_logic
+        )
+        self.assertIn(
+            "action = DashboardPowerAction::cancelPowerOffHold", normalized_logic
+        )
         self.assertIn(
             "if (!usbConnected) action = DashboardPowerAction::powerOff",
             normalized_logic,

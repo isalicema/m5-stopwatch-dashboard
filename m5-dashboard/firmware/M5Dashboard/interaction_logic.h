@@ -13,6 +13,8 @@ enum class DashboardPowerAction {
   none,
   toggleScreen,
   openLauncher,
+  beginPowerOffHold,
+  cancelPowerOffHold,
   powerOff,
 };
 
@@ -430,6 +432,7 @@ inline DashboardClickAction flushDashboardClick(DashboardClickButtonState &state
 struct DashboardPowerButtonState {
   bool wasPressed = false;
   bool longPressHandled = false;
+  bool powerOffHoldActive = false;
   bool singleClickPending = false;
   bool secondPressCandidate = false;
   uint32_t pressedAt = 0;
@@ -521,7 +524,7 @@ inline int dashboardTranscriptOffset(int currentOffset, int deltaRows,
 inline DashboardPowerAction updateDashboardPowerButton(
     DashboardPowerButtonState &state, bool pressed, uint32_t now,
     uint32_t shortPressMaxMs, uint32_t doubleClickMs,
-    uint32_t longPressMs, bool usbConnected) {
+    uint32_t holdPreviewMs, uint32_t powerOffMs, bool usbConnected) {
   DashboardPowerAction action = DashboardPowerAction::none;
 
   if (pressed && !state.wasPressed) {
@@ -532,17 +535,31 @@ inline DashboardPowerAction updateDashboardPowerButton(
         static_cast<uint32_t>(now - state.releasedAt) < doubleClickMs;
   }
 
-  if (pressed && !state.longPressHandled &&
-      static_cast<uint32_t>(now - state.pressedAt) >= longPressMs) {
-    state.longPressHandled = true;
-    state.singleClickPending = false;
-    state.secondPressCandidate = false;
-    if (!usbConnected) action = DashboardPowerAction::powerOff;
+  if (pressed && !state.longPressHandled) {
+    uint32_t heldMs = static_cast<uint32_t>(now - state.pressedAt);
+    if (heldMs >= powerOffMs) {
+      state.longPressHandled = true;
+      state.singleClickPending = false;
+      state.secondPressCandidate = false;
+      state.powerOffHoldActive = false;
+      if (!usbConnected) action = DashboardPowerAction::powerOff;
+    } else if (!usbConnected && !state.powerOffHoldActive &&
+               heldMs >= holdPreviewMs) {
+      state.powerOffHoldActive = true;
+      state.singleClickPending = false;
+      state.secondPressCandidate = false;
+      action = DashboardPowerAction::beginPowerOffHold;
+    }
   }
 
   if (!pressed && state.wasPressed) {
     uint32_t heldMs = static_cast<uint32_t>(now - state.pressedAt);
-    if (!state.longPressHandled && heldMs < shortPressMaxMs) {
+    if (state.powerOffHoldActive) {
+      state.powerOffHoldActive = false;
+      state.singleClickPending = false;
+      state.secondPressCandidate = false;
+      action = DashboardPowerAction::cancelPowerOffHold;
+    } else if (!state.longPressHandled && heldMs < shortPressMaxMs) {
       if (state.secondPressCandidate) {
         state.singleClickPending = false;
         action = DashboardPowerAction::openLauncher;

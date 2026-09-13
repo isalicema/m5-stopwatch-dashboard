@@ -280,6 +280,10 @@ bool powerStatusNeedsRedraw = false;
 volatile bool screenLocked = false;
 bool pendingAiHotspotWake = false;
 DashboardPowerButtonState powerButtonState;
+bool powerOffHoldVisible = false;
+bool powerOffHoldReturnLocked = false;
+uint32_t powerOffHoldStartedAt = 0;
+uint32_t lastPowerOffHoldFrameAt = 0;
 bool transitionCanvasReady = false;
 bool frameCanvasReady = false;
 bool editorialFrameAccentActive = false;
@@ -465,7 +469,8 @@ constexpr uint8_t kM5Pm1LedOpenDrainMask = 0x20;
 constexpr uint32_t kM5Pm1I2cFrequency = 100000;
 constexpr uint32_t kPowerButtonShortPressMaxMs = 1500;
 constexpr uint32_t kPowerButtonDoubleClickMs = 500;
-constexpr uint32_t kPowerButtonLongPressMs = 1600;
+constexpr uint32_t kPowerButtonHoldPreviewMs = 700;
+constexpr uint32_t kPowerButtonPowerOffMs = 2500;
 constexpr int kDisplayChipSelectPin = 39;
 constexpr uint8_t kTouchResetIoExpanderPin = 3;  // M5IOE1 gpio4.
 // A deliberate page swipe should not require crossing a large part of the
@@ -576,6 +581,7 @@ void enterAppLauncher();
 void updateLocalCountdownTimer();
 bool readBButtonPressed();
 size_t visibleDashboardResultCount();
+String provisioningAccessPointName();
 void drawProvisioningPage(const String &apName, bool ready);
 void showConnectionStatus();
 void openWifiPicker();
@@ -1167,6 +1173,104 @@ void playPowerOffTransition() {
   delay(220);
 }
 
+void drawPowerOffHoldFrame(int percent) {
+  const uint16_t background = rgb(0, 0, 0);
+  const uint16_t mint = rgb(63, 226, 174);
+  const uint16_t muted = rgb(125, 139, 134);
+  const uint16_t track = rgb(30, 45, 41);
+  percent = constrain(percent, 0, 100);
+
+  editorialFrameAccentActive = false;
+  editorialFrameBurstActive = false;
+  canvas.fillScreen(background);
+
+  // A growing ring makes the irreversible threshold visible without looking
+  // like the final shutdown animation. The centre stays quiet and legible.
+  canvas.fillSmoothCircle(225, 198, 72, track);
+  canvas.fillSmoothCircle(225, 198, 62, background);
+  if (percent > 0) {
+    if (percent >= 100) {
+      canvas.fillSmoothCircle(225, 198, 72, mint);
+      canvas.fillSmoothCircle(225, 198, 62, background);
+    } else {
+      float endAngle = 270.0f + 360.0f * percent / 100.0f;
+      canvas.fillArc(225, 198, 72, 62, 270.0f, endAngle, mint);
+      constexpr float centerRadius = 67.0f;
+      constexpr int capRadius = 5;
+      canvas.fillSmoothCircle(225, 198 - static_cast<int>(centerRadius),
+                              capRadius, mint);
+      float radians = endAngle * PI / 180.0f;
+      canvas.fillSmoothCircle(
+          225 + static_cast<int>(lroundf(cosf(radians) * centerRadius)),
+          198 + static_cast<int>(lroundf(sinf(radians) * centerRadius)),
+          capRadius, mint);
+    }
+  }
+  canvas.fillSmoothCircle(225, 198, 28, mint);
+  canvas.fillSmoothRoundRect(219, 178, 12, 34, 6, background);
+  canvas.fillSmoothRoundRect(219, 216, 12, 5, 2, background);
+
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(mint);
+  useEditorialBold24();
+  canvas.drawString("POWER OFF", 225, 302);
+  canvas.setTextColor(muted);
+  useEditorialMicro14();
+  canvas.drawString("KEEP HOLDING", 225, 331);
+  canvas.drawString("RELEASE TO CANCEL", 225, 353);
+
+  composeRenderedFrame(background);
+  pushRenderedFrame(background);
+}
+
+void beginPowerOffHold() {
+  powerOffHoldVisible = true;
+  powerOffHoldReturnLocked = screenLocked;
+  powerOffHoldStartedAt = millis();
+  lastPowerOffHoldFrameAt = 0;
+  requireHighPerformance();
+
+  // A hold that begins while the display is asleep temporarily wakes only the
+  // panel. Cancellation below restores the exact screen-off state.
+  if (powerOffHoldReturnLocked) {
+    setAmoledHardwareSleep(false);
+    applyDisplayBrightness();
+  }
+  startVibration(42, 24);
+  drawPowerOffHoldFrame(0);
+}
+
+void cancelPowerOffHold() {
+  if (!powerOffHoldVisible) return;
+  powerOffHoldVisible = false;
+  startVibration(30, 18);
+  if (powerOffHoldReturnLocked) {
+    M5.Display.setBrightness(0);
+    M5.Display.waitDisplay();
+    setAmoledHardwareSleep(true);
+    enterCpuLowPower();
+  } else if (configMode) {
+    drawProvisioningPage(provisioningAccessPointName(), true);
+  } else {
+    drawCurrentPage();
+  }
+}
+
+void updatePowerOffHoldFrame() {
+  if (!powerOffHoldVisible) return;
+  uint32_t now = millis();
+  if (lastPowerOffHoldFrameAt != 0 &&
+      static_cast<uint32_t>(now - lastPowerOffHoldFrameAt) < 33) {
+    return;
+  }
+  lastPowerOffHoldFrameAt = now;
+  constexpr uint32_t progressMs =
+      kPowerButtonPowerOffMs - kPowerButtonHoldPreviewMs;
+  uint32_t elapsed = static_cast<uint32_t>(now - powerOffHoldStartedAt);
+  int percent = elapsed >= progressMs ? 100 : elapsed * 100 / progressMs;
+  drawPowerOffHoldFrame(percent);
+}
+
 void startCompletionAnimation(char provider, const String &source, size_t count) {
   if (screenLocked || configMode) return;
   uint32_t now = millis();
@@ -1355,7 +1459,8 @@ void updatePowerButton() {
   bool pressed = readPowerButtonPressed();
   DashboardPowerAction action = updateDashboardPowerButton(
       powerButtonState, pressed, millis(), kPowerButtonShortPressMaxMs,
-      kPowerButtonDoubleClickMs, kPowerButtonLongPressMs, deviceUsbConnected);
+      kPowerButtonDoubleClickMs, kPowerButtonHoldPreviewMs,
+      kPowerButtonPowerOffMs, deviceUsbConnected);
   if (action == DashboardPowerAction::toggleScreen) {
     setScreenLocked(!screenLocked);
   } else if (action == DashboardPowerAction::openLauncher) {
@@ -1363,7 +1468,12 @@ void updatePowerButton() {
     pendingAiHotspotWake = false;
     if (screenLocked) setScreenLocked(false);
     enterAppLauncher();
+  } else if (action == DashboardPowerAction::beginPowerOffHold) {
+    beginPowerOffHold();
+  } else if (action == DashboardPowerAction::cancelPowerOffHold) {
+    cancelPowerOffHold();
   } else if (action == DashboardPowerAction::powerOff) {
+    powerOffHoldVisible = false;
     stopVoiceForStandby();
     stopTonePattern();
     // Make the two following pulses unambiguously haptic. The codec and PA are
@@ -7025,6 +7135,13 @@ void loop() {
   updatePowerButton();
   updateVibration();
   updateTonePattern();
+  if (powerOffHoldVisible) {
+    // The hold scene owns the panel until the user releases or crosses the
+    // commit threshold; page refreshes must not paint over its progress.
+    updatePowerOffHoldFrame();
+    delay(8);
+    return;
+  }
   updateLocalCountdownTimer();
   updateVoiceAudio();
   updateAudioPowerGuard();

@@ -188,62 +188,76 @@ int main() {
   assert(flushDashboardClick(click, 259, 360) == DashboardClickAction::singleClick);
 
   DashboardPowerButtonState power;
-  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 679, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 679, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 680, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 680, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::toggleScreen);
 
   power = {};
-  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, true, 400, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 400, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 470, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 470, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::openLauncher);
 
+  // A deliberate hold first enters a reversible preview. Releasing before the
+  // commit threshold cancels it and consumes the press instead of toggling the
+  // display or opening the launcher.
   power = {};
-  assert(updateDashboardPowerButton(power, true, 100, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 1000, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 180, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 1699, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, true, 400, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 1700, 1500, 500, 700, 2500, false) ==
+         DashboardPowerAction::beginPowerOffHold);
+  assert(updateDashboardPowerButton(power, true, 2499, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, true, 2000, 1500, 500, 1600, false) ==
-         DashboardPowerAction::powerOff);
-  assert(updateDashboardPowerButton(power, false, 2100, 1500, 500, 1600, false) ==
-         DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 2600, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 2500, 1500, 500, 700, 2500, false) ==
+         DashboardPowerAction::cancelPowerOffHold);
+  assert(updateDashboardPowerButton(power, false, 3100, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
 
+  // Holding through the complete threshold commits shutdown exactly once.
   power = {};
-  assert(updateDashboardPowerButton(power, true, 1000, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 3000, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, true, 2600, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 3700, 1500, 500, 700, 2500, false) ==
+         DashboardPowerAction::beginPowerOffHold);
+  assert(updateDashboardPowerButton(power, true, 5499, 1500, 500, 700, 2500, false) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, true, 5500, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::powerOff);
-  assert(updateDashboardPowerButton(power, false, 2700, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, 5600, 1500, 500, 700, 2500, false) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, false, 5700, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
 
+  // USB keeps the PMIC's Download Mode path authoritative: no software hold
+  // preview and no software power-off action are emitted.
   power = {};
-  assert(updateDashboardPowerButton(power, true, 2000, 1500, 500, 1600, true) ==
+  assert(updateDashboardPowerButton(power, true, 2000, 1500, 500, 700, 2500, true) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, true, 3600, 1500, 500, 1600, true) ==
+  assert(updateDashboardPowerButton(power, true, 2700, 1500, 500, 700, 2500, true) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 3700, 1500, 500, 1600, true) ==
+  assert(updateDashboardPowerButton(power, true, 4500, 1500, 500, 700, 2500, true) ==
+         DashboardPowerAction::none);
+  assert(updateDashboardPowerButton(power, false, 4600, 1500, 500, 700, 2500, true) ==
          DashboardPowerAction::none);
 
   power = {};
   uint32_t nearWrap = UINT32_MAX - 100;
-  assert(updateDashboardPowerButton(power, true, nearWrap, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, true, nearWrap, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, nearWrap + 50, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, nearWrap + 50, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::none);
-  assert(updateDashboardPowerButton(power, false, 449, 1500, 500, 1600, false) ==
+  assert(updateDashboardPowerButton(power, false, 449, 1500, 500, 700, 2500, false) ==
          DashboardPowerAction::toggleScreen);
 
   LocalStopwatchModel localStopwatch;
