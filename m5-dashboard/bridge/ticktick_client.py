@@ -154,6 +154,7 @@ class TickTickMonitor(threading.Thread):
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._state = self._offline("starting")
+        self._pending_action = ""
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def _offline(self, error: str) -> Dict[str, Any]:
@@ -192,6 +193,26 @@ class TickTickMonitor(threading.Thread):
         return value
 
     def refresh(self) -> Dict[str, Any]:
+        pending_state: Optional[Dict[str, Any]] = None
+        with self._lock:
+            if self._pending_action:
+                state = copy.deepcopy(self._state)
+                timer_key = (
+                    "stopwatch"
+                    if self._pending_action == "stopwatch-end"
+                    else "countdown"
+                )
+                timer = state.setdefault(timer_key, {})
+                timer["state"] = "ending"
+                timer["last_action"] = "ending"
+                timer["last_error"] = ""
+                state["connected"] = True
+                state["updated_at"] = int(time.time())
+                self._state = copy.deepcopy(state)
+                pending_state = state
+        if pending_state is not None:
+            self.update(pending_state)
+            return pending_state
         try:
             focus = self._request("/focus/state")
             countdown = self._request("/pomo/state")
@@ -219,6 +240,24 @@ class TickTickMonitor(threading.Thread):
         with self._lock:
             return copy.deepcopy(self._state)
 
+    def _set_pending_action(self, action: str) -> None:
+        with self._lock:
+            self._pending_action = action
+            state = copy.deepcopy(self._state)
+            timer_key = "stopwatch" if action == "stopwatch-end" else "countdown"
+            timer = state.setdefault(timer_key, {})
+            timer["state"] = "ending"
+            timer["last_action"] = "ending"
+            timer["last_error"] = ""
+            state["connected"] = True
+            state["updated_at"] = int(time.time())
+            self._state = copy.deepcopy(state)
+        self.update(state)
+
+    def _clear_pending_action(self) -> None:
+        with self._lock:
+            self._pending_action = ""
+
     def perform(self, action: str) -> Dict[str, Any]:
         if action not in ACTIONS:
             raise ValueError("unknown TickTick action: %s" % action)
@@ -231,7 +270,11 @@ class TickTickMonitor(threading.Thread):
                 self._request("/pomo/pause", {}, self.action_timeout)
             self._request("/focus/click", {}, self.action_timeout)
         elif action == "stopwatch-end":
-            self._request("/focus/double-click", {}, self.action_timeout)
+            self._set_pending_action(action)
+            try:
+                self._request("/focus/double-click", {}, self.action_timeout)
+            finally:
+                self._clear_pending_action()
         elif action == "countdown-click":
             if countdown_state == "running":
                 path, payload = "/pomo/pause", {}
@@ -245,7 +288,11 @@ class TickTickMonitor(threading.Thread):
                 path, payload = "/pomo/start", {"duration_seconds": self.duration_seconds}
             self._request(path, payload, self.action_timeout)
         else:
-            self._request("/pomo/end", {}, self.action_timeout)
+            self._set_pending_action(action)
+            try:
+                self._request("/pomo/end", {}, self.action_timeout)
+            finally:
+                self._clear_pending_action()
         return self.refresh()
 
     def stop(self) -> None:

@@ -77,6 +77,46 @@ class TickTickMonitorTests(unittest.TestCase):
         self.assertEqual(self.monitor.timeout, 2)
         self.assertEqual(self.monitor.action_timeout, 12)
 
+    def test_ending_action_publishes_pending_state_before_waiting_for_ticktick(self):
+        running = {
+            "connected": True,
+            "stopwatch": {"state": "running", "elapsed_seconds": 81},
+            "countdown": {"state": "idle", "remaining_seconds": 1500},
+        }
+        idle = {
+            "connected": True,
+            "stopwatch": {"state": "idle", "elapsed_seconds": 81},
+            "countdown": {"state": "idle", "remaining_seconds": 1500},
+        }
+        self.monitor._state = running
+        self.monitor.refresh = mock.Mock(side_effect=[running, idle])
+
+        def request_while_pending(path, payload, timeout):
+            self.assertEqual(path, "/focus/double-click")
+            self.assertEqual(self.monitor.snapshot()["stopwatch"]["state"], "ending")
+            self.assertEqual(self.states[-1]["stopwatch"]["last_action"], "ending")
+            return {"ok": True}
+
+        self.monitor._request = mock.Mock(side_effect=request_while_pending)
+        result = self.monitor.perform("stopwatch-end")
+
+        self.assertEqual(result["stopwatch"]["state"], "idle")
+        self.assertEqual(self.monitor._pending_action, "")
+
+    def test_background_refresh_keeps_pending_end_visible_without_polling(self):
+        self.monitor._state = {
+            "connected": True,
+            "stopwatch": {"state": "running", "elapsed_seconds": 81},
+            "countdown": {"state": "idle", "remaining_seconds": 1500},
+        }
+        self.monitor._set_pending_action("stopwatch-end")
+        self.monitor._opener.open = mock.Mock()
+
+        value = self.monitor.refresh()
+
+        self.assertEqual(value["stopwatch"]["state"], "ending")
+        self.monitor._opener.open.assert_not_called()
+
 
 class DailyFocusLedgerTests(unittest.TestCase):
     def test_seeds_visible_sessions_then_accumulates_new_progress_once(self):
