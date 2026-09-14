@@ -4,6 +4,7 @@
 **/*.py[cod]
 **/.pytest_cache/
 **/.flash-env/
+**/backups/
 **/.pio/
 
 # Finder/editor numbered source backups are not firmware sources.

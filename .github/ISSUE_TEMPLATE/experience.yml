@@ -1,0 +1,27 @@
+name: 使用反馈 / Experience
+description: 装好了、正在尝试，或停在了某一步，都欢迎告诉我们。
+title: "[Feedback] "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 版本与环境
+      placeholder: 固件 / Bridge 版本、设备型号、macOS 版本（如有）。
+  - type: dropdown
+    id: progress
+    attributes:
+      label: 目前进展
+      options:
+        - 已安装并正在使用
+        - 已安装，正在探索
+        - 尝试安装，但卡住了
+        - 还没安装，在了解项目
+    validations:
+      required: true
+  - type: textarea
+    id: experience
+    attributes:
+      label: 你的体验
+      description: 在用哪些功能？最有帮助的地方是什么？有什么阻碍？截图请先隐藏私人信息。
+    validations:
+      required: true

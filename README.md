@@ -1,11 +1,31 @@
 # M5 StopWatch Dashboard
 
+[下载当前版本 v2026.09.14](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v2026.09.14) ·
+[安装指南](docs/install-release.md) ·
+[问题、建议与使用反馈](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new/choose)
+
 > Alice 的个人分支以好友@Googler0825 的开源 Dashboard 为底座，并持续针对实际工作流、
 > 圆屏交互与本地隐私边界进行加固。
 
 这不是把电脑仪表盘硬塞进一块圆屏，而是 Alice 的一张桌面工作切片：它会报时、盯住专注、
 看看 Coding AI 今天忙成什么样，在真正重要的 AI 消息到来时尖叫一声，也会从 Obsidian 里
 捞起一篇很久没有见过的笔记。
+
+## 先跑起来
+
+准备 **M5Stack StopWatch（C152，原厂 16 MB 分区布局）**、一台 Mac 和一根支持数据传输的
+USB-C 线。Mac 需要可用的 Python 3；TickTick、Typeless 和 AI 用量伴随服务均按需安装。
+
+1. 从 [Release](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v2026.09.14)
+   下载预编译 UAC 应用固件和 `SHA256SUMS`，按[安装指南](docs/install-release.md)校验、备份并通过 USB 烧录。
+2. 只想体验本地秒表与倒计时：开机选择 **Stopwatch** 或 **Timer**，无需安装 Mac Bridge。
+3. 想用 Dashboard：取得同版本源码，在 `m5-dashboard` 目录运行
+   `python3 scripts/install.py --launch-agent`。安装器生成本机 Token，插线进入 Dashboard 后通过 USB 自动配对。
+4. 基础连接跑通后，再按下面的[伴随项目说明](#按需安装的伴随项目)接入需要的功能。
+
+本次发布通过源码测试与固件编译，尚未对本次发布镜像重新进行实机验收。
+如果装好了，也欢迎到[使用反馈](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new?template=experience.yml)
+告诉我们你在用哪些功能；卡住时可直接[报告问题](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new?template=bug_report.yml)。
 
 ## 一块表，三个程序
 
@@ -47,8 +67,8 @@
   若此时收到 AI 尖叫，下一次唤醒会直接进入第 6 屏。
 - **双击**：运行中从任意页面回到程序选择器；真关机后双击开机。
 - **长按**：未连接 USB 时，约 `0.7 秒`进入可取消的关机预告；继续按到约 `2.5 秒`才真正
-  关机，阈值前松手会取消并恢复原界面。连接 USB 时软件不截获长按，继续按住约 2 秒会
-  进入原厂 Download Mode，方便烧录与救援。
+  关机，阈值前松手会取消并恢复原界面。仅接充电器或充电宝时也支持长按关机；当 USB 已被
+  电脑识别为数据设备时保留长按进入原厂 Download Mode 的入口，方便烧录与救援。
 
 短按熄屏会快速淡出并轻震；真关机显示 `POWER OFF · SHUTTING DOWN`，冷启动显示
 `M5 DASHBOARD · STARTING`，因此可以直观看出当前只是熄屏，还是完整关机/开机。
@@ -114,8 +134,9 @@ Codex 与 Claude Code 的完成动画刻意采用两条独立路线，不把普�
 
 ## 固件
 
-仓库不跟踪预编译固件。可按 [固件构建说明](m5-dashboard/README.md#platformio) 自行编译；
-项目维护者也可以通过 [GitHub Releases](../../releases) 提供已验证的应用分区镜像。
+预编译 UAC 应用固件在 [GitHub Releases](https://github.com/isalicema/m5-stopwatch-dashboard/releases)
+提供，源码仓库不跟踪构建产物。每个发布版本附有 SHA-256 校验文件、构建信息及第三方声明。
+下载与首次安装见[安装指南](docs/install-release.md)，也可按[固件构建说明](m5-dashboard/README.md#platformio)自行编译。
 首次安装和故障救援仍使用 USB。救援脚本只重置原厂 `otadata` 并写入 `ota_0`
 （起点 `0x20000`），不会执行 `erase_flash`，因此 NVS 中保存的 Wi-Fi、令牌和设备设置会保留。
 

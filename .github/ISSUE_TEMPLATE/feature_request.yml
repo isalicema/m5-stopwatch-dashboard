@@ -1,0 +1,18 @@
+name: 功能建议 / Feature request
+description: 分享你希望用这块表解决的具体问题。
+title: "[Idea] "
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 你想解决什么问题？
+      description: 描述使用场景，以及目前怎么处理。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望它怎样工作？
+      description: 可以写具体交互、参考案例或替代方案。
+    validations:
+      required: true

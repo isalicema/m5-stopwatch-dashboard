@@ -1,0 +1,33 @@
+name: 报告问题 / Bug report
+description: 安装、连接或使用时遇到问题，帮助我们复现。
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传 Token、Wi-Fi 密码、完整 config.json、私人笔记或对话内容。日志和截图请先脱敏。
+  - type: input
+    id: version
+    attributes:
+      label: 固件与 Bridge 版本
+      placeholder: 例如 v2026.09.14，或各自的 commit SHA；不清楚也可注明。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 使用环境
+      description: 设备型号、macOS 版本、Apple Silicon / Intel、USB / Wi-Fi；涉及伴随应用时请注明版本。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 发生了什么？怎样复现？
+      description: 写下操作步骤、预期结果与实际结果。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志或截图（可选）
+      description: 只贴与问题有关的脱敏片段。

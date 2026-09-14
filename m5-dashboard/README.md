@@ -1,5 +1,8 @@
 # M5 StopWatch：TickTick 专注 + AI Dashboard
 
+首次安装建议从[Release 安装指南](../docs/install-release.md)开始：下载预编译固件、备份、
+USB 烧录，再接入 Mac Bridge。[报告问题或分享体验](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new/choose)。
+
 这是 Alice 的 M5Stack StopWatch 圆屏工作台：
 
 - TickTick 专注：A 键控制正计时，B 键控制 25 分钟倒计时。
@@ -236,7 +239,8 @@ HTTP OTA 是 Bridge 辅助的后续升级通道，不替代 USB 首次烧录和�
   监听与提示音保持工作。
 - 红色电源键双击：运行中从任意页面进入程序选择器；真关机后双击开机。
 - 红色电源键长按：未连接 USB 时约 0.7 秒进入可取消关机预告，继续按到约 2.5 秒才提交；
-  阈值前松手立即取消并恢复原状态。连接 USB 时保留约 2 秒进入 Download Mode 的入口。
+  阈值前松手立即取消并恢复原状态。仅接充电器或充电宝时也可长按关机；USB 已被电脑识别
+  为数据设备时，保留长按进入 Download Mode 的入口。
 - 短按熄屏会快速淡出并轻震；真关机与冷启动分别显示独立的 `SHUTTING DOWN` 和
   `STARTING` 动画，避免把熄屏误认为关机。
 - 左右滑动：切换时钟、TickTick 专注、Codex、Claude、Typeless、AI 热点和 Obsidian 七页。
