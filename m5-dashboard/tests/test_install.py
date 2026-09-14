@@ -350,7 +350,9 @@ class InstallTests(unittest.TestCase):
                 return mock.Mock(returncode=0)
 
             with mock.patch.object(
-                self.installer.shutil, "which", return_value="/usr/bin/clang"
+                self.installer, "_native_macos_architecture", return_value="arm64"
+            ), mock.patch.object(
+                self.installer, "_macho_architectures", return_value={"arm64"}
             ), mock.patch.object(
                 self.installer.subprocess, "run", side_effect=fake_run
             ):
@@ -366,8 +368,15 @@ class InstallTests(unittest.TestCase):
                 any(
                     "--sign" in command
                     and "studio.machiwhale.m5stopwatch.typeless-key-sender" in command
+                    and "--requirements" in command
+                    and '=designated => identifier "studio.machiwhale.m5stopwatch.typeless-key-sender"'
+                    in command
                     for command in commands
                 )
+            )
+            compile_command = next(command for command in commands if "-o" in command)
+            self.assertEqual(
+                compile_command[compile_command.index("-arch") + 1], "arm64"
             )
 
     def test_typeless_key_helper_is_not_resigned_when_source_is_unchanged(self):
@@ -389,7 +398,9 @@ class InstallTests(unittest.TestCase):
             }
 
             with mock.patch.object(
-                self.installer.shutil, "which", return_value="/usr/bin/clang"
+                self.installer, "_native_macos_architecture", return_value="arm64"
+            ), mock.patch.object(
+                self.installer, "_macho_architectures", return_value={"arm64"}
             ), mock.patch.object(self.installer.subprocess, "run") as run:
                 self.installer.install_typeless_key_sender(p)
                 self.installer.install_typeless_key_sender(p)
@@ -398,6 +409,56 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(helper.read_bytes(), b"approved-existing-helper")
             self.assertTrue(
                 (app.parent / ".TypelessKeySender.source-sha256").is_file()
+            )
+
+    def test_typeless_key_helper_rebuilds_when_cached_binary_has_wrong_architecture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "project/mac/TypelessKeySender.c"
+            source.parent.mkdir(parents=True)
+            source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            app = root / "installed/TypelessKeySender.app"
+            helper = app / "Contents/MacOS/TypelessKeySender"
+            info = app / "Contents/Info.plist"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"cached-intel-helper")
+            info.write_bytes(b"existing-plist")
+            marker = app.parent / ".TypelessKeySender.source-sha256"
+            marker.write_text(
+                self.installer._typeless_helper_fingerprint(source, "arm64") + "\n",
+                encoding="utf-8",
+            )
+            p = {
+                "project": root / "project",
+                "typeless_helper": helper,
+                "typeless_helper_info": info,
+            }
+            architecture_checks = iter([{"x86_64"}, {"arm64"}])
+            commands = []
+
+            def fake_run(command, check):
+                self.assertTrue(check)
+                commands.append(command)
+                if "-o" in command:
+                    Path(command[command.index("-o") + 1]).write_bytes(b"rebuilt-arm-helper")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(
+                self.installer, "_native_macos_architecture", return_value="arm64"
+            ), mock.patch.object(
+                self.installer,
+                "_macho_architectures",
+                side_effect=lambda _path: next(architecture_checks),
+            ), mock.patch.object(
+                self.installer.subprocess, "run", side_effect=fake_run
+            ):
+                self.installer.install_typeless_key_sender(p)
+
+            self.assertEqual(helper.read_bytes(), b"rebuilt-arm-helper")
+            compile_command = next(command for command in commands if "-o" in command)
+            self.assertIn("-arch", compile_command)
+            self.assertEqual(
+                compile_command[compile_command.index("-arch") + 1], "arm64"
             )
 
     def test_typeless_preflight_fails_before_install_without_settings(self):

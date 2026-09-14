@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import platform
 import plistlib
 import secrets
 import shlex
@@ -653,13 +654,62 @@ def _typeless_helper_prerequisites(p: Dict[str, Path]) -> Dict[str, Path]:
     source = p["project"] / "mac/TypelessKeySender.c"
     if not source.is_file():
         raise SystemExit("Missing Typeless key helper source: %s" % source)
-    compiler = shutil.which("clang")
+    system_compiler = Path("/usr/bin/clang")
+    compiler = str(system_compiler) if system_compiler.is_file() else shutil.which("clang")
     if not compiler:
         raise SystemExit(
             "Cannot build the Typeless key helper because clang is unavailable. "
             "Install the Xcode Command Line Tools first."
         )
     return {"source": source, "compiler": Path(compiler)}
+
+
+def _native_macos_architecture() -> str:
+    """Return the hardware architecture even when Python runs via Rosetta."""
+    sysctl = Path("/usr/sbin/sysctl")
+    if sysctl.is_file():
+        checked = subprocess.run(
+            [str(sysctl), "-n", "hw.optional.arm64"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if checked.returncode == 0 and checked.stdout.strip() == "1":
+            return "arm64"
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        return "arm64"
+    if machine in ("x86_64", "amd64"):
+        return "x86_64"
+    raise SystemExit("Unsupported macOS architecture for TypelessKeySender: %s" % machine)
+
+
+def _macho_architectures(binary: Path) -> set[str]:
+    lipo = shutil.which("lipo") or "/usr/bin/lipo"
+    checked = subprocess.run(
+        [str(lipo), "-archs", str(binary)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if checked.returncode != 0:
+        return set()
+    return set(checked.stdout.split())
+
+
+def _typeless_helper_fingerprint(source: Path, target_arch: str) -> str:
+    # Keep this description in lockstep with the compile command below. The
+    # architecture and explicit thin-native strategy prevent a helper built in
+    # a Rosetta parent process from being mistaken for a current Apple-Silicon
+    # build merely because the C source has not changed.
+    strategy = (
+        "m5-typeless-helper-v3\0"
+        "strategy=thin-native\0"
+        f"target={target_arch}\0"
+        "flags=-O2,-Wall,-Wextra,-arch,ApplicationServices\0"
+        "signing=adhoc-stable-designated-requirement-v1\0"
+    ).encode("utf-8")
+    return hashlib.sha256(strategy + source.read_bytes()).hexdigest()
 
 
 def preflight_typeless_install(p: Dict[str, Path]) -> None:
@@ -680,32 +730,37 @@ def preflight_typeless_install(p: Dict[str, Path]) -> None:
 
 def install_typeless_key_sender(p: Dict[str, Path]) -> None:
     inputs = _typeless_helper_prerequisites(p)
+    target_arch = _native_macos_architecture()
     helper = p["typeless_helper"]
     info = p["typeless_helper_info"]
     app_bundle = helper.parents[2]
     marker = app_bundle.parent / ".TypelessKeySender.source-sha256"
-    fingerprint = hashlib.sha256(
-        b"m5-typeless-helper-v1\0"
-        + inputs["source"].read_bytes()
-        + b"\0-O2-Wall-Wextra-ApplicationServices"
-    ).hexdigest()
+    fingerprint = _typeless_helper_fingerprint(inputs["source"], target_arch)
 
     if helper.is_file() and info.is_file():
+        installed_architectures = _macho_architectures(helper)
+        architecture_is_current = target_arch in installed_architectures
         try:
             installed_fingerprint = marker.read_text(encoding="utf-8").strip()
         except OSError:
             installed_fingerprint = ""
-        if installed_fingerprint == fingerprint:
+        if installed_fingerprint == fingerprint and architecture_is_current:
             print("Typeless key helper is already current; preserved its Accessibility identity.")
             return
-        if not installed_fingerprint:
+        if not installed_fingerprint and architecture_is_current:
             # Migration for helpers installed before the external build marker
-            # existed. Keep the already working signed bundle byte-for-byte;
-            # replacing or even re-signing it changes its ad-hoc CDHash and
-            # invalidates macOS Accessibility approval.
+            # existed. Preserve only a binary that actually supports this
+            # Mac; an Intel-only helper on Apple Silicon must be rebuilt even
+            # when replacing it invalidates the old Accessibility approval.
             marker.write_text(fingerprint + "\n", encoding="utf-8")
             print("Preserved the existing Typeless key helper and recorded its source fingerprint.")
             return
+        if not architecture_is_current:
+            found = ",".join(sorted(installed_architectures)) or "unknown"
+            print(
+                "Rebuilding Typeless key helper for %s; installed architecture is %s."
+                % (target_arch, found)
+            )
 
     signer = shutil.which("codesign") or "/usr/bin/codesign"
     helper.parent.mkdir(parents=True, exist_ok=True)
@@ -714,6 +769,8 @@ def install_typeless_key_sender(p: Dict[str, Path]) -> None:
         subprocess.run(
             [
                 str(inputs["compiler"]),
+                "-arch",
+                target_arch,
                 "-O2",
                 "-Wall",
                 "-Wextra",
@@ -725,6 +782,13 @@ def install_typeless_key_sender(p: Dict[str, Path]) -> None:
             ],
             check=True,
         )
+        built_architectures = _macho_architectures(temporary)
+        if target_arch not in built_architectures:
+            found = ",".join(sorted(built_architectures)) or "unknown"
+            raise SystemExit(
+                "Built Typeless key helper does not contain %s (found: %s)."
+                % (target_arch, found)
+            )
         os.replace(temporary, helper)
     except subprocess.CalledProcessError as exc:
         raise SystemExit("Failed to build the Typeless key helper: %s" % exc)
@@ -748,6 +812,8 @@ def install_typeless_key_sender(p: Dict[str, Path]) -> None:
             target,
             sort_keys=True,
         )
+    bundle_identifier = "studio.machiwhale.m5stopwatch.typeless-key-sender"
+    designated_requirement = '=designated => identifier "%s"' % bundle_identifier
     try:
         subprocess.run(
             [
@@ -757,7 +823,9 @@ def install_typeless_key_sender(p: Dict[str, Path]) -> None:
                 "--sign",
                 "-",
                 "--identifier",
-                "studio.machiwhale.m5stopwatch.typeless-key-sender",
+                bundle_identifier,
+                "--requirements",
+                designated_requirement,
                 str(app_bundle),
             ],
             check=True,
