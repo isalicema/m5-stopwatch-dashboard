@@ -1,6 +1,6 @@
 # M5 StopWatch Dashboard
 
-[下载当前版本 v2026.09.14](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v2026.09.14) ·
+[下载当前版本 v1.5.0](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v1.5.0) ·
 [安装指南](docs/install-release.md) ·
 [问题、建议与使用反馈](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new/choose)
 
@@ -16,14 +16,15 @@
 准备 **M5Stack StopWatch（C152，原厂 16 MB 分区布局）**、一台 Mac 和一根支持数据传输的
 USB-C 线。Mac 需要可用的 Python 3；TickTick、Typeless 和 AI 用量伴随服务均按需安装。
 
-1. 从 [Release](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v2026.09.14)
+1. 从 [Release](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v1.5.0)
    下载预编译 UAC 应用固件和 `SHA256SUMS`，按[安装指南](docs/install-release.md)校验、备份并通过 USB 烧录。
 2. 只想体验本地秒表与倒计时：开机选择 **Stopwatch** 或 **Timer**，无需安装 Mac Bridge。
 3. 想用 Dashboard：取得同版本源码，在 `m5-dashboard` 目录运行
    `python3 scripts/install.py --launch-agent`。安装器生成本机 Token，插线进入 Dashboard 后通过 USB 自动配对。
 4. 基础连接跑通后，再按下面的[伴随项目说明](#按需安装的伴随项目)接入需要的功能。
 
-本次发布通过源码测试与固件编译，尚未对本次发布镜像重新进行实机验收。
+本次发布通过源码测试与固件编译；完整关机后单击开机的电源交互已在同一源码修复上完成真机验收。
+自动化测试与这项验收不替代其他外设、网络或伴随服务组合的真机验证。
 如果装好了，也欢迎到[使用反馈](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new?template=experience.yml)
 告诉我们你在用哪些功能；卡住时可直接[报告问题](https://github.com/isalicema/m5-stopwatch-dashboard/issues/new?template=bug_report.yml)。
 

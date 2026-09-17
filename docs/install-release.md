@@ -1,8 +1,8 @@
 # 安装 Release 固件
 
-当前版本：[v2026.09.14](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v2026.09.14)。
+当前版本：[v1.5.0](https://github.com/isalicema/m5-stopwatch-dashboard/releases/tag/v1.5.0)。
 适用于 **M5Stack StopWatch / C152、ESP32-S3、原厂 16 MB 分区布局**；Mac Bridge 面向 macOS。
-本次镜像通过自动化测试与编译，尚未对本次镜像重新进行实机验收。
+本次镜像通过自动化测试与编译；完整关机后单击开机的电源交互已在同一源码修复上完成真机验收。
 
 ## 1. 取得同版本源码和固件
 
@@ -10,11 +10,11 @@ Mac 需要 Git、可用的 Python 3 和支持数据传输的 USB-C 线。使用�
 在终端运行：
 
 ```bash
-git clone --branch v2026.09.14 --depth 1 https://github.com/isalicema/m5-stopwatch-dashboard.git
+git clone --branch v1.5.0 --depth 1 https://github.com/isalicema/m5-stopwatch-dashboard.git
 cd m5-stopwatch-dashboard/m5-dashboard
 mkdir -p dist
-curl -fL -o dist/M5Dashboard-v2026.09.14-uac.bin https://github.com/isalicema/m5-stopwatch-dashboard/releases/download/v2026.09.14/M5Dashboard-v2026.09.14-uac.bin
-curl -fL -o dist/SHA256SUMS https://github.com/isalicema/m5-stopwatch-dashboard/releases/download/v2026.09.14/SHA256SUMS
+curl -fL -o dist/M5Dashboard-v1.5.0-uac.bin https://github.com/isalicema/m5-stopwatch-dashboard/releases/download/v1.5.0/M5Dashboard-v1.5.0-uac.bin
+curl -fL -o dist/SHA256SUMS https://github.com/isalicema/m5-stopwatch-dashboard/releases/download/v1.5.0/SHA256SUMS
 (cd dist && shasum -a 256 -c SHA256SUMS)
 ```
 
@@ -45,7 +45,7 @@ shasum -a 256 backups/stopwatch-before-release.bin > backups/stopwatch-before-re
 仍在 `m5-dashboard` 目录，设备保持 Download Mode：
 
 ```bash
-.flash-env/bin/python scripts/flash_compiled.py --port /dev/cu.YOUR_STOPWATCH_PORT --firmware dist/M5Dashboard-v2026.09.14-uac.bin
+.flash-env/bin/python scripts/flash_compiled.py --port /dev/cu.YOUR_STOPWATCH_PORT --firmware dist/M5Dashboard-v1.5.0-uac.bin
 ```
 
 已有备份的用户可以直接使用 `python3 scripts/flash_compiled.py` 的同样参数；脚本会寻找可用的
