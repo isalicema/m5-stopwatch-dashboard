@@ -232,6 +232,16 @@ class UiFontTests(unittest.TestCase):
         self.assertEqual(port, "/dev/cu.usbmodem101")
         self.assertEqual(before_mode, "no_reset")
 
+    def test_bootloader_handoff_never_selects_an_unrelated_surviving_port(self):
+        before = {"/dev/cu.usbmodem101", "/dev/cu.usbmodemM5DASHMIC31"}
+        transient = {"/dev/cu.usbmodem101"}
+        completed = {"/dev/cu.usbmodem101", "/dev/cu.usbmodem2101"}
+        self.assertIsNone(flash_compiled.newly_enumerated_port(before, transient))
+        self.assertEqual(
+            flash_compiled.newly_enumerated_port(before, completed),
+            "/dev/cu.usbmodem2101",
+        )
+
     def test_flash_pauses_imac_peer_bridge(self):
         self.assertIn(
             "com.local.m5dashboard.peer", flash_compiled.DASHBOARD_SERVICE_LABELS

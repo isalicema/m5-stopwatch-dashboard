@@ -480,6 +480,19 @@ int main() {
   assert(dashboardTranscriptOffset(1, -5, 6, 4) == 0);
   assert(dashboardTranscriptOffset(0, 1, 3, 4) == 0);
 
+  // Normal battery and charging-only operation locks M5PM1's independent
+  // long-press Download Mode so it cannot beat the app's true shutdown. A
+  // genuine USB data host unlocks the recovery shortcut without changing the
+  // familiar timing fields or app-owned single click.
+  uint8_t lockedPowerConfig = dashboardPowerButtonConfig1(0x06, false);
+  uint8_t recoveryPowerConfig = dashboardPowerButtonConfig1(0x06, true);
+  assert((lockedPowerConfig & 0x80) != 0);
+  assert((recoveryPowerConfig & 0x80) == 0);
+  assert((lockedPowerConfig & 0x60) == 0x40);
+  assert((recoveryPowerConfig & 0x18) == 0x08);
+  assert((lockedPowerConfig & 0x07) == 0x07);
+  assert((recoveryPowerConfig & 0x07) == 0x07);
+
   assert(dashboardFeatureTouchTarget(120, 360, false) ==
          DashboardFeatureTouchTarget::primary);
   assert(dashboardFeatureTouchTarget(300, 360, false) ==

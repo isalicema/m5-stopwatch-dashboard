@@ -126,8 +126,20 @@ class AppShellTests(unittest.TestCase):
             self.source,
         )
         self.assertIn(
-            "kPowerButtonPowerOffMs, usbDownloadModeReserved()",
+            "bool reserveDownloadMode = usbDownloadModeReserved();",
+            self.source,
+        )
+        self.assertIn(
+            "updatePowerButtonDownloadModePolicy(reserveDownloadMode);",
+            self.source,
+        )
+        self.assertIn(
+            "kPowerButtonPowerOffMs, reserveDownloadMode);",
             normalized_source,
+        )
+        self.assertIn(
+            "config1 = dashboardPowerButtonConfig1(config1, false);",
+            self.source,
         )
         self.assertIn(
             "return deviceVbusPresent && usbAudioReady && tud_mounted();",

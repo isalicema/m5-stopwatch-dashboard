@@ -64,6 +64,12 @@ def serial_ports() -> List[str]:
     return sorted({item for pattern in patterns for item in glob.glob(pattern)})
 
 
+def newly_enumerated_port(before: set[str], current: set[str]) -> str | None:
+    """Return one genuinely new serial path, never an unrelated survivor."""
+    added = sorted(current - before)
+    return added[0] if len(added) == 1 else None
+
+
 def esptool_command(project: Path) -> List[str]:
     executable = shutil.which("esptool.py") or shutil.which("esptool")
     if executable:
@@ -148,11 +154,9 @@ def bootloader_port(port: str, timeout_seconds: float = 10.0) -> Tuple[str, str]
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         current = set(serial_ports())
-        new_ports = sorted(current - before)
-        if len(new_ports) == 1:
-            return new_ports[0], "no_reset"
-        if port not in current and len(current) == 1:
-            return next(iter(current)), "no_reset"
+        new_port = newly_enumerated_port(before, current)
+        if new_port is not None:
+            return new_port, "no_reset"
         time.sleep(0.2)
     raise SystemExit("M5 已请求进入下载模式，但没有发现新串口；请检查 USB 线后重试")
 

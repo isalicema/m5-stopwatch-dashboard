@@ -281,6 +281,8 @@ bool powerStatusNeedsRedraw = false;
 volatile bool screenLocked = false;
 bool pendingAiHotspotWake = false;
 DashboardPowerButtonState powerButtonState;
+bool powerButtonDownloadModePolicyKnown = false;
+bool powerButtonDownloadModeReserved = false;
 bool powerOffHoldVisible = false;
 bool powerOffHoldReturnLocked = false;
 uint32_t powerOffHoldStartedAt = 0;
@@ -462,6 +464,7 @@ uint32_t nextToneAt = 0;
 constexpr uint8_t kM5Pm1Address = 0x6E;
 constexpr uint8_t kM5Pm1PowerConfigRegister = 0x06;
 constexpr uint8_t kM5Pm1GpioDriveRegister = 0x13;
+constexpr uint8_t kM5Pm1ButtonIrqStatusRegister = 0x42;
 constexpr uint8_t kM5Pm1ButtonStatusRegister = 0x48;
 constexpr uint8_t kM5Pm1ButtonConfig1Register = 0x49;
 constexpr uint8_t kM5Pm1ButtonConfig2Register = 0x4A;
@@ -1340,6 +1343,12 @@ bool readPowerButtonPressed() {
           0x01) != 0;
 }
 
+void clearPowerButtonIrqStatus() {
+  M5.In_I2C.writeRegister8(kM5Pm1Address,
+                           kM5Pm1ButtonIrqStatusRegister, 0,
+                           kM5Pm1I2cFrequency);
+}
+
 void disableBottomLed() {
   // Disable the NeoPixel engine, clear LED_EN, and make LED_EN open-drain so it
   // cannot source current while the dashboard is running or in standby.
@@ -1360,18 +1369,36 @@ void disableBottomLed() {
 void configurePowerButtonPolicy() {
   uint8_t config1 = M5.In_I2C.readRegister8(
       kM5Pm1Address, kM5Pm1ButtonConfig1Register, kM5Pm1I2cFrequency);
-  config1 &= ~0x80;                    // Keep the official USB download action enabled.
-  config1 = (config1 & ~0x60) | 0x40;  // Use the PMIC's 500 ms double-click window.
-  config1 = (config1 & ~0x18) | 0x08;  // USB + 2-second hold enters download mode.
-  config1 |= 0x01;                     // Single click belongs to the app shell.
-  M5.In_I2C.writeRegister8(kM5Pm1Address, kM5Pm1ButtonConfig1Register, config1,
-                           kM5Pm1I2cFrequency);
+  // M5PM1's physical long press always enters Download Mode. Lock it by
+  // default so it cannot pre-empt the Dashboard's 2.5 second true shutdown at
+  // roughly 72% of the progress ring. A mounted USB data host unlocks it
+  // dynamically in updatePowerButton().
+  config1 = dashboardPowerButtonConfig1(config1, false);
+  powerButtonDownloadModePolicyKnown = M5.In_I2C.writeRegister8(
+      kM5Pm1Address, kM5Pm1ButtonConfig1Register, config1,
+      kM5Pm1I2cFrequency);
+  powerButtonDownloadModeReserved = false;
 
   uint8_t config2 = M5.In_I2C.readRegister8(
       kM5Pm1Address, kM5Pm1ButtonConfig2Register, kM5Pm1I2cFrequency);
   config2 |= 0x01;  // Disable PMIC double-click shutdown; software uses long press.
   M5.In_I2C.writeRegister8(kM5Pm1Address, kM5Pm1ButtonConfig2Register, config2,
                            kM5Pm1I2cFrequency);
+}
+
+void updatePowerButtonDownloadModePolicy(bool reserveDownloadMode) {
+  if (powerButtonDownloadModePolicyKnown &&
+      powerButtonDownloadModeReserved == reserveDownloadMode) {
+    return;
+  }
+  uint8_t config1 = M5.In_I2C.readRegister8(
+      kM5Pm1Address, kM5Pm1ButtonConfig1Register, kM5Pm1I2cFrequency);
+  config1 = dashboardPowerButtonConfig1(config1, reserveDownloadMode);
+  if (M5.In_I2C.writeRegister8(kM5Pm1Address, kM5Pm1ButtonConfig1Register,
+                               config1, kM5Pm1I2cFrequency)) {
+    powerButtonDownloadModePolicyKnown = true;
+    powerButtonDownloadModeReserved = reserveDownloadMode;
+  }
 }
 
 void setAmoledHardwareSleep(bool sleeping) {
@@ -1476,10 +1503,12 @@ void setScreenLocked(bool locked) {
 
 void updatePowerButton() {
   bool pressed = readPowerButtonPressed();
+  bool reserveDownloadMode = usbDownloadModeReserved();
+  updatePowerButtonDownloadModePolicy(reserveDownloadMode);
   DashboardPowerAction action = updateDashboardPowerButton(
       powerButtonState, pressed, millis(), kPowerButtonShortPressMaxMs,
       kPowerButtonDoubleClickMs, kPowerButtonHoldPreviewMs,
-      kPowerButtonPowerOffMs, usbDownloadModeReserved());
+      kPowerButtonPowerOffMs, reserveDownloadMode);
   if (action == DashboardPowerAction::toggleScreen) {
     setScreenLocked(!screenLocked);
   } else if (action == DashboardPowerAction::openLauncher) {
@@ -1510,6 +1539,7 @@ void updatePowerButton() {
     M5.Display.waitDisplay();
     setAmoledHardwareSleep(true);
     M5.getIOExpander(0).digitalWrite(kTouchResetIoExpanderPin, false);
+    clearPowerButtonIrqStatus();
     M5.Power.powerOff();
   }
 }
@@ -7112,6 +7142,9 @@ void setup() {
   pinMode(kBButtonPin, INPUT_PULLUP);
   configurePowerButtonPolicy();
   disableBottomLed();
+  // M5PM1 powers the device from the first physical click. Cold boot therefore
+  // accepts that click directly; double-click remains an in-app shortcut only.
+  clearPowerButtonIrqStatus();
   M5.Display.setRotation(0);
   loadUiPreferences();
   loadCountdownPreferences();

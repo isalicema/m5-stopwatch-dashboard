@@ -534,6 +534,22 @@ inline int dashboardTranscriptOffset(int currentOffset, int deltaRows,
   return next;
 }
 
+// M5PM1 maps a physical long press to Download Mode independently of the
+// application.  Keep that hardware shortcut locked during normal battery or
+// charging-only use so the Dashboard's cancellable 2.5 second shutdown can
+// finish first.  Unlock it only while a real USB data host is present.
+inline uint8_t dashboardPowerButtonConfig1(uint8_t current,
+                                           bool reserveDownloadMode) {
+  constexpr uint8_t downloadModeLockMask = 0x80;
+  current = reserveDownloadMode
+                ? static_cast<uint8_t>(current & ~downloadModeLockMask)
+                : static_cast<uint8_t>(current | downloadModeLockMask);
+  current = static_cast<uint8_t>((current & ~0x60) | 0x40);  // 500 ms double-click.
+  current = static_cast<uint8_t>((current & ~0x18) | 0x08);  // 2 second long press.
+  current = static_cast<uint8_t>(current | 0x01);             // App owns single-click.
+  return current;
+}
+
 inline DashboardPowerAction updateDashboardPowerButton(
     DashboardPowerButtonState &state, bool pressed, uint32_t now,
     uint32_t shortPressMaxMs, uint32_t doubleClickMs,
