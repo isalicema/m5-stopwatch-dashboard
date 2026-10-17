@@ -5,7 +5,7 @@
 - Goal: keep the public Dashboard Bridge responsive while background Codex data is slow.
 - Effective scope: the Codex Bridge implementation and its unit tests only. Claude behavior, configuration, installer, firmware, and device release artifacts are excluded.
 - Candidate base: public `main` release baseline `b84a6eb`.
-- Delivery state: local implementation and tests in progress; no tag, release, deployment, firmware build, flash, or device acceptance is implied by this entry.
+- Delivery state: implementation and tests passed; code commit `0c4e18d` is pushed to public `main`. No tag, release, deployment, firmware build, flash, or device acceptance is implied by this entry.
 
 ## P2026-10-17-01 — Dashboard Bridge energy optimization sync
 
@@ -13,6 +13,6 @@ Alice requested a selective public sync of the Dashboard Bridge optimization tha
 
 The implementation preserves the existing product completion receipt as the condition that alerts the watch. It adds tests for non-blocking local state under a deliberately slow remote thread response, completion wake behavior, and shared file inventory behavior. Source configuration, local sessions, credentials, traffic details, and private device/runtime records are not included.
 
-Validation: targeted Bridge tests (33 tests) and the full public suite (259 tests) passed with Python 3.14.7; `git diff --check` passed. Publication remains pending as of this record. No firmware build, flash, deployment, release tag, or device acceptance was run for this Bridge-only change.
+Validation: targeted Bridge tests (33 tests) and the full public suite (259 tests) passed with Python 3.14.7; `git diff --check` passed. Code publication: commit `0c4e18d` was pushed to public `main` and its remote SHA was read back. No firmware build, flash, deployment, release tag, or device acceptance was run for this Bridge-only change.
 
 The source scope was selected from a private development handoff, but this public record intentionally contains only the public behavior and independently reproducible test evidence.
