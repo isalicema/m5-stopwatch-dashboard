@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
+
+from .session_files import SessionFile, recent_session_files
 
 
 def _epoch(value: Any, fallback: float) -> float:
@@ -28,29 +30,10 @@ class _JsonlActivityTracker:
         self._offsets: Dict[Path, int] = {}
         self._states: Dict[Path, Dict[str, Any]] = {}
 
-    def _recent_paths(self, now: float) -> List[Path]:
-        if not self.root.is_dir():
-            return []
-        candidates = []
-        try:
-            for path in self.root.rglob("*.jsonl"):
-                try:
-                    modified = path.stat().st_mtime
-                except OSError:
-                    continue
-                if modified >= now - self.stale_seconds:
-                    candidates.append((modified, path))
-        except OSError:
-            return []
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return [path for _, path in candidates[: self.max_files]]
+    def _recent_files(self, now: float) -> List[SessionFile]:
+        return recent_session_files(self.root, now, self.stale_seconds)
 
-    def _advance(self, path: Path) -> None:
-        try:
-            size = path.stat().st_size
-            modified = path.stat().st_mtime
-        except OSError:
-            return
+    def _advance(self, path: Path, modified: float, size: int) -> None:
         offset = self._offsets.get(path, 0)
         if size < offset:
             offset = 0
@@ -79,10 +62,12 @@ class _JsonlActivityTracker:
     def _consume(self, state: Dict[str, Any], record: Dict[str, Any], stamp: float) -> None:
         raise NotImplementedError
 
-    def _refresh(self) -> Iterable[Dict[str, Any]]:
+    def _refresh(self, files: Optional[List[SessionFile]] = None) -> Iterable[Dict[str, Any]]:
         now = datetime.now().timestamp()
-        for path in self._recent_paths(now):
-            self._advance(path)
+        candidates = files if files is not None else self._recent_files(now)
+        for path, modified, size in candidates[: self.max_files]:
+            if modified >= now - self.stale_seconds:
+                self._advance(path, modified, size)
         return self._states.values()
 
 
@@ -128,28 +113,35 @@ class LocalCodexActivity(_JsonlActivityTracker):
             # a subsequent task_complete still wins immediately.
             state.update({"state": "working", "last_event": stamp})
 
-    def active_count(self) -> int:
+    def status_snapshot(
+        self, files: Optional[List[SessionFile]] = None
+    ) -> tuple[int, Dict[str, str]]:
+        """Refresh once, then derive working count and approval routing together."""
         now = datetime.now().timestamp()
-        return sum(
-            1
-            for state in self._refresh()
-            if state.get("state") == "working"
-            and not state.get("parent_thread_id")
-            and now - max(float(state.get("last_event") or 0), float(state.get("modified") or 0))
-            <= self.stale_seconds
-        )
-
-    def approval_reviewers(self) -> Dict[str, str]:
-        """Return per-task approval routing without exposing task content."""
-        output: Dict[str, str] = {}
-        for state in self._refresh():
+        count = 0
+        reviewers: Dict[str, str] = {}
+        for state in self._refresh(files):
+            if (
+                state.get("state") == "working"
+                and not state.get("parent_thread_id")
+                and now - max(float(state.get("last_event") or 0), float(state.get("modified") or 0))
+                <= self.stale_seconds
+            ):
+                count += 1
             session_id = str(state.get("session_id") or "")
             reviewer = str(state.get("approvals_reviewer") or "")
             if not session_id or not reviewer or state.get("parent_thread_id"):
                 continue
-            output[session_id] = reviewer
-            output[session_id[-8:]] = reviewer
-        return output
+            reviewers[session_id] = reviewer
+            reviewers[session_id[-8:]] = reviewer
+        return count, reviewers
+
+    def active_count(self) -> int:
+        return self.status_snapshot()[0]
+
+    def approval_reviewers(self) -> Dict[str, str]:
+        """Return per-task approval routing without exposing task content."""
+        return self.status_snapshot()[1]
 
 
 class LocalClaudeActivity(_JsonlActivityTracker):

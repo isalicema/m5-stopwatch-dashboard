@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from .session_files import SessionFile, recent_session_files
+
 
 _MAX_TRACKED_MESSAGES = 32
 _MAX_PUBLIC_TASKS = 3
@@ -65,22 +67,8 @@ class _TranscriptTracker:
         self._offsets: Dict[Path, int] = {}
         self._states: Dict[Path, Dict[str, Any]] = {}
 
-    def _recent_paths(self, now: float) -> List[Path]:
-        if not self.root.is_dir():
-            return []
-        candidates = []
-        try:
-            for path in self.root.rglob("*.jsonl"):
-                try:
-                    modified = path.stat().st_mtime
-                except OSError:
-                    continue
-                if modified >= now - self.stale_seconds:
-                    candidates.append((modified, path))
-        except OSError:
-            return []
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return [path for _, path in candidates[: self.max_files]]
+    def _recent_files(self, now: float) -> List[SessionFile]:
+        return recent_session_files(self.root, now, self.stale_seconds)
 
     def _new_state(self, path: Path, modified: float) -> Dict[str, Any]:
         return {
@@ -99,12 +87,7 @@ class _TranscriptTracker:
             "message_indexes": {},
         }
 
-    def _advance(self, path: Path) -> None:
-        try:
-            size = path.stat().st_size
-            modified = path.stat().st_mtime
-        except OSError:
-            return
+    def _advance(self, path: Path, modified: float, size: int) -> None:
         offset = self._offsets.get(path, 0)
         if size < offset:
             offset = 0
@@ -157,10 +140,14 @@ class _TranscriptTracker:
     def _fallback_title(self, state: Dict[str, Any], index: int) -> str:
         raise NotImplementedError
 
-    def snapshots(self, expose: bool = False) -> List[Dict[str, Any]]:
+    def snapshots(
+        self, expose: bool = False, files: Optional[List[SessionFile]] = None
+    ) -> List[Dict[str, Any]]:
         now = datetime.now().timestamp()
-        for path in self._recent_paths(now):
-            self._advance(path)
+        candidates = files if files is not None else self._recent_files(now)
+        for path, modified, size in candidates[: self.max_files]:
+            if modified >= now - self.stale_seconds:
+                self._advance(path, modified, size)
         active = [
             state
             for state in self._states.values()
@@ -224,8 +211,8 @@ class _TranscriptTracker:
         if current.tzinfo is None:
             current = current.astimezone()
         day_start = current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        for path in self._recent_paths(current.timestamp()):
-            self._advance(path)
+        for path, modified, size in self._recent_files(current.timestamp())[: self.max_files]:
+            self._advance(path, modified, size)
         completed = []
         for index, state in enumerate(self._states.values(), 1):
             if state.get("parent_thread_id"):

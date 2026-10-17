@@ -5,10 +5,28 @@ from bridge.app import (
     dispatch_completion_action,
     dispatch_dashboard_action,
     dispatch_ticktick_action,
+    record_completion,
 )
+from bridge.state import DashboardState
 
 
 class DashboardHttpTests(unittest.TestCase):
+    def test_official_completion_alerts_without_remote_polling(self):
+        state = DashboardState("Air")
+        alerts = []
+        wakes = []
+
+        class Monitor:
+            def wake(self):
+                wakes.append(True)
+
+        payload = {"id": "turn-1", "title": "Codex", "completed_at": 123}
+        result = record_completion(state, "codex", Monitor(), [alerts.append], payload)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(alerts, ["codex"])
+        self.assertEqual(len(wakes), 1)
+        self.assertEqual(len(state.snapshot()["codex"]["results"]), 1)
+
     def setUp(self):
         self.actions = []
         self.action = lambda value: self.actions.append(value) or {"connected": True}

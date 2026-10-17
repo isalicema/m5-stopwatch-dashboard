@@ -256,6 +256,24 @@ def build_handler(
     return Handler
 
 
+def record_completion(
+    dashboard: DashboardState,
+    provider: str,
+    monitor: Any,
+    sinks: list[Callable[[str], Any]],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Acknowledge the official receipt and alert the watch without remote polling."""
+    result = dashboard.add_completion(provider, payload)
+    monitor.wake()
+    for sink in sinks:
+        try:
+            sink(provider)
+        except OSError:
+            continue
+    return {"provider": provider, "accepted": True, "completed_at": result["completed_at"]}
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="TickTick + Codex bridge for M5Stack StopWatch")
     parser.add_argument("--config", default="config.json", help="path to config.json")
@@ -287,14 +305,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     def completed(
         provider: str, monitor: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        result = dashboard.add_completion(provider, payload)
-        monitor.wake()
-        for sink in completion_sinks:
-            try:
-                sink(provider)
-            except OSError:
-                continue
-        return {"provider": provider, "accepted": True, "completed_at": result["completed_at"]}
+        return record_completion(dashboard, provider, monitor, completion_sinks, payload)
 
     ticktick_monitor: Optional[TickTickMonitor] = None
     if ticktick_config.get("enabled", True):

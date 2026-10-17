@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,15 +19,94 @@ from bridge.codex_client import (
     normalize_peer_daily_usage,
 )
 from bridge.codex_hook import notify_bridge
+from bridge.app import record_completion
+from bridge.state import DashboardState
 
 
 class CodexMergeTests(unittest.TestCase):
+    def test_slow_thread_list_does_not_block_local_work_or_completion_wake(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            waiting = threading.Event()
+            release = threading.Event()
+            states = []
+
+            class SlowClient:
+                def __init__(self, binary):
+                    self.process = None
+                    self.calls = []
+
+                def start(self):
+                    pass
+
+                def close(self):
+                    release.set()
+
+                def request(self, method, params=None):
+                    self.calls.append(method)
+                    if method == "thread/list":
+                        waiting.set()
+                        release.wait(5)
+                        return {"data": []}
+                    return {}
+
+            monitor = CodexMonitor({
+                "session_root": root, "hook_state_path": str(Path(root) / "hooks.json"),
+                "expose_transcript": True, "transcript_refresh_seconds": 1,
+                "threads_refresh_seconds": 5,
+            }, states.append)
+            with mock.patch("bridge.codex_client.AppServerClient", SlowClient):
+                monitor.start()
+                try:
+                    self.assertTrue(waiting.wait(2))
+                    deadline = time.monotonic() + 2
+                    while not states and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(states)
+                    dashboard = DashboardState("Air")
+                    alerts = []
+                    receipt_start = time.monotonic()
+                    record_completion(dashboard, "codex", monitor, [alerts.append], {
+                        "id": "turn-1", "title": "Codex", "completed_at": 123,
+                    })
+                    self.assertLess(time.monotonic() - receipt_start, 0.1)
+                    self.assertEqual(alerts, ["codex"])
+                    self.assertEqual(dashboard.snapshot()["codex"]["results"][0]["id"], "turn-1")
+                    while monitor._wake_event.is_set() and time.monotonic() - receipt_start < 2:
+                        time.sleep(0.01)
+                    self.assertFalse(monitor._wake_event.is_set())
+                    with path.open("a", encoding="utf-8") as handle:
+                        handle.write("\n".join(json.dumps(row) for row in [
+                            {"timestamp": datetime.now().astimezone().isoformat(),
+                             "type": "session_meta", "payload": {"id": "new-thread-12345678"}},
+                            {"timestamp": datetime.now().astimezone().isoformat(),
+                             "type": "event_msg", "payload": {"type": "task_started"}},
+                        ]) + "\n")
+                    started = time.monotonic()
+                    while time.monotonic() - started < 2 and not any(
+                        state["active_count"] == 1 for state in states
+                    ):
+                        time.sleep(0.01)
+                    self.assertTrue(any(state["active_count"] == 1 for state in states))
+                    self.assertLess(time.monotonic() - started, 2)
+                    self.assertEqual(states[-1]["transcripts"][0]["id"], "12345678")
+                    self.assertEqual(monitor._client.calls.count("thread/list"), 1)
+                finally:
+                    monitor.stop()
+                    release.set()
+                    monitor.join(2)
+
     def test_completion_wake_interrupts_poll_delay(self):
         monitor = CodexMonitor({}, lambda _: None)
         self.assertEqual(monitor.wake(), {"provider": "codex", "woken": True})
         self.assertTrue(monitor._wake_event.is_set())
         monitor._wait(10)
         self.assertFalse(monitor._wake_event.is_set())
+        monitor.wake()
+        started = time.monotonic()
+        monitor._wait(10)
+        self.assertLess(time.monotonic() - started, 0.1)
 
     def test_hook_notifies_authenticated_local_bridge(self):
         with tempfile.TemporaryDirectory() as temporary:

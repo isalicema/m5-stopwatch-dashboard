@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 from bridge.local_activity import LocalClaudeActivity, LocalCodexActivity
+from bridge.session_files import recent_session_files
+from bridge.transcript import LocalCodexTranscripts
 
 
 def stamp():
@@ -12,6 +14,30 @@ def stamp():
 
 
 class LocalActivityTests(unittest.TestCase):
+    def test_codex_activity_and_transcripts_share_one_inventory(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "today" / "session.jsonl"
+            path.parent.mkdir(parents=True)
+            path.write_text("\n".join(json.dumps(row) for row in [
+                {"timestamp": stamp(), "type": "session_meta", "payload": {"id": "thread-12345678"}},
+                {"timestamp": stamp(), "type": "turn_context", "payload": {"approvals_reviewer": "user_review"}},
+                {"timestamp": stamp(), "type": "event_msg", "payload": {"type": "task_started"}},
+            ]) + "\n", encoding="utf-8")
+            files = recent_session_files(Path(root), datetime.now().timestamp(), 60)
+            activity = LocalCodexActivity(root, stale_seconds=60)
+            transcripts = LocalCodexTranscripts(root, stale_seconds=60)
+            self.assertEqual(activity.status_snapshot(files), (1, {
+                "thread-12345678": "user_review", "12345678": "user_review",
+            }))
+            self.assertEqual(len(transcripts.snapshots(True, files)), 1)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "timestamp": stamp(), "type": "event_msg", "payload": {"type": "task_complete"},
+                }) + "\n")
+            files = recent_session_files(Path(root), datetime.now().timestamp(), 60)
+            self.assertEqual(activity.status_snapshot(files)[0], 0)
+            self.assertEqual(transcripts.snapshots(True, files), [])
+
     def test_codex_task_lifecycle_works_without_notify_hook(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "today" / "session.jsonl"

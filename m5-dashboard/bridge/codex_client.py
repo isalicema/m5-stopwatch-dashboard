@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .local_activity import LocalCodexActivity
+from .session_files import recent_session_files
 from .transcript import LocalCodexTranscripts
 
 
@@ -24,6 +25,7 @@ class AppServerClient:
         self._next_id = 1
         self._pending: Dict[int, queue.Queue[Dict[str, Any]]] = {}
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._reader: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -75,8 +77,9 @@ class AppServerClient:
         process = self.process
         if not process or process.poll() is not None or not process.stdin:
             raise ConnectionError("Codex App Server is not running")
-        process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
-        process.stdin.flush()
+        with self._write_lock:
+            process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+            process.stdin.flush()
 
     def notify(self, method: str, params: Dict[str, Any]) -> None:
         self._write({"method": method, "params": params})
@@ -475,6 +478,10 @@ class CodexMonitor(threading.Thread):
         self.on_state = on_state
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
+        self._wake_lock = threading.Lock()
+        self._wake_count = 0
+        self._wake_seen = 0
+        self._poll_stop: Optional[threading.Event] = None
         self._client: Optional[AppServerClient] = None
         self._local_activity = LocalCodexActivity(
             str(config.get("session_root") or "~/.codex/sessions"),
@@ -487,18 +494,29 @@ class CodexMonitor(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self._poll_stop:
+            self._poll_stop.set()
         self._wake_event.set()
         if self._client:
             self._client.close()
 
     def wake(self) -> Dict[str, Any]:
         """Interrupt the normal polling delay after a product completion hook."""
-        self._wake_event.set()
+        with self._wake_lock:
+            self._wake_count += 1
+            self._wake_event.set()
         return {"provider": "codex", "woken": True}
 
     def _wait(self, seconds: float) -> None:
+        with self._wake_lock:
+            if self._wake_count != self._wake_seen:
+                self._wake_seen = self._wake_count
+                self._wake_event.clear()
+                return
         self._wake_event.wait(seconds)
-        self._wake_event.clear()
+        with self._wake_lock:
+            self._wake_seen = self._wake_count
+            self._wake_event.clear()
 
     def _binary(self) -> str:
         configured = str(self.config.get("codex_binary") or "codex")
@@ -512,25 +530,37 @@ class CodexMonitor(threading.Thread):
         client.start()
         usage_refresh = max(15, int(self.config.get("usage_refresh_seconds", 60)))
         thread_refresh = max(2, int(self.config.get("threads_refresh_seconds", 5)))
-        if self.config.get("expose_transcript", False):
-            thread_refresh = max(
-                1,
-                min(thread_refresh, int(self.config.get("transcript_refresh_seconds", 1))),
-            )
-        next_usage = 0.0
-        limits: Dict[str, Any] = {}
-        usage: Dict[str, Any] = {}
-        threads: List[Dict[str, Any]] = []
-        peer_usage_cache: Dict[str, Dict[str, Any]] = {}
-        usage_error = ""
-        while not self._stop_event.is_set():
-            now_mono = time.monotonic()
-            if now_mono >= next_usage:
+        local_refresh = (
+            max(1, int(self.config.get("transcript_refresh_seconds", 1)))
+            if self.config.get("expose_transcript", False)
+            else thread_refresh
+        )
+        remote_lock = threading.Lock()
+        remote: Dict[str, Any] = {"limits": {}, "usage": {}, "threads": []}
+        poll_stop = threading.Event()
+        self._poll_stop = poll_stop
+
+        def poll_threads() -> None:
+            while not poll_stop.is_set() and not self._stop_event.is_set():
+                try:
+                    result = client.request("thread/list", {"limit": 100}) or {}
+                    with remote_lock:
+                        remote["threads"] = result.get("data") or []
+                        remote["thread_error"] = ""
+                except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
+                    with remote_lock:
+                        remote["thread_error"] = str(exc)[:160]
+                poll_stop.wait(thread_refresh)
+
+        def poll_usage() -> None:
+            peer_usage_cache: Dict[str, Dict[str, Any]] = {}
+            limits: Dict[str, Any] = {}
+            while not poll_stop.is_set() and not self._stop_event.is_set():
+                usage_error = ""
                 try:
                     fresh_limits = client.request("account/rateLimits/read") or {}
                     if fresh_limits:
                         limits = fresh_limits
-                    usage_error = ""
                 except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
                     usage_error = str(exc)[:160]
                 try:
@@ -538,9 +568,13 @@ class CodexMonitor(threading.Thread):
                 except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
                     raw_usage = {}
                     usage_error = str(exc)[:160]
-                local_usage = collect_local_daily_usage(
-                    str(self.config.get("session_root") or "~/.codex/sessions")
-                )
+                try:
+                    local_usage = collect_local_daily_usage(
+                        str(self.config.get("session_root") or "~/.codex/sessions")
+                    )
+                except (OSError, ValueError) as exc:
+                    local_usage = {}
+                    usage_error = str(exc)[:160]
                 current = datetime.now().astimezone()
                 for index, source in enumerate(self.config.get("peer_usage_sources") or []):
                     if not isinstance(source, dict) or source.get("enabled") is False:
@@ -574,71 +608,70 @@ class CodexMonitor(threading.Thread):
                     "longest_turn_sec": summary.get("longestRunningTurnSec"),
                     "current_streak_days": summary.get("currentStreakDays"),
                 }
-                next_usage = now_mono + usage_refresh
-            result = client.request("thread/list", {"limit": 100}) or {}
-            threads = result.get("data") or []
-            hook_sessions = load_hook_sessions(str(self.config["hook_state_path"]))
-            sessions = merge_sessions(
-                hook_sessions,
-                threads,
-                bool(
-                    self.config.get("expose_titles", False)
-                    or self.config.get("expose_transcript", False)
-                ),
-                int(self.config.get("working_stale_seconds", 21600)),
-                int(self.config.get("waiting_input_stale_seconds", 21600)),
-                self._local_activity.approval_reviewers(),
-                int(self.config.get("missing_thread_grace_seconds", 30)),
-            )
-            # Desktop Codex writes task_started/task_complete into its local
-            # JSONL even when lifecycle hooks do not fire. Keep using that
-            # source to fill the live working count; completion feedback is
-            # deliberately handled only by the product-level notify receipt.
-            hook_working = sum(s["status"] == "working" for s in sessions)
-            for index in range(max(0, self._local_activity.active_count() - hook_working)):
-                sessions.append(
-                    {
-                        "id": "local-%d" % (index + 1),
-                        "title": "当前 Codex",
-                        "status": "working",
-                        "model": "",
-                        "started_at": 0,
-                        "updated_at": int(time.time()),
-                    }
+                with remote_lock:
+                    remote.update({"limits": limits, "usage": usage, "usage_error": usage_error})
+                poll_stop.wait(usage_refresh)
+
+        threading.Thread(target=poll_threads, name="codex-thread-list", daemon=True).start()
+        threading.Thread(target=poll_usage, name="codex-usage", daemon=True).start()
+        try:
+            while not self._stop_event.is_set():
+                with remote_lock:
+                    threads = list(remote["threads"])
+                    limits = dict(remote["limits"])
+                    usage = dict(remote["usage"])
+                    errors = [remote.get("thread_error") or "", remote.get("usage_error") or ""]
+                if client.process and client.process.poll() is not None:
+                    raise ConnectionError("Codex App Server exited")
+                now = time.time()
+                files = recent_session_files(
+                    self._local_activity.root,
+                    now,
+                    self._local_activity.stale_seconds,
                 )
-            raw_limits = limits.get("rateLimitsByLimitId") or {}
-            if not raw_limits and limits.get("rateLimits"):
-                raw_limits = {str(limits["rateLimits"].get("limitId") or "codex"): limits["rateLimits"]}
-            formatted_limits = format_rate_limits(raw_limits)
-            expose_transcript = bool(self.config.get("expose_transcript", False))
-            transcripts = apply_thread_titles(
-                self._transcripts.snapshots(expose_transcript),
-                threads,
-                expose_transcript,
-            )
-            results = hook_completion_results(
-                hook_sessions,
-                threads,
-                bool(self.config.get("expose_titles", False)),
-            )
-            active = {"working"}
-            waiting = {"waiting_approval", "waiting_input"}
-            self.on_state(
-                {
+                local_active, reviewers = self._local_activity.status_snapshot(files)
+                hook_sessions = load_hook_sessions(str(self.config["hook_state_path"]))
+                sessions = merge_sessions(
+                    hook_sessions,
+                    threads,
+                    bool(self.config.get("expose_titles", False) or self.config.get("expose_transcript", False)),
+                    int(self.config.get("working_stale_seconds", 21600)),
+                    int(self.config.get("waiting_input_stale_seconds", 21600)),
+                    reviewers,
+                    int(self.config.get("missing_thread_grace_seconds", 30)),
+                )
+                # Local JSONL fills missing working state only. Completion feedback
+                # still requires the product-level notify receipt.
+                hook_working = sum(s["status"] == "working" for s in sessions)
+                for index in range(max(0, local_active - hook_working)):
+                    sessions.append({
+                        "id": "local-%d" % (index + 1), "title": "当前 Codex",
+                        "status": "working", "model": "", "started_at": 0,
+                        "updated_at": int(time.time()),
+                    })
+                raw_limits = limits.get("rateLimitsByLimitId") or {}
+                if not raw_limits and limits.get("rateLimits"):
+                    raw_limits = {str(limits["rateLimits"].get("limitId") or "codex"): limits["rateLimits"]}
+                expose_transcript = bool(self.config.get("expose_transcript", False))
+                transcripts = apply_thread_titles(
+                    self._transcripts.snapshots(expose_transcript, files), threads, expose_transcript
+                )
+                results = hook_completion_results(
+                    hook_sessions, threads, bool(self.config.get("expose_titles", False))
+                )
+                self.on_state({
                     "connected": True,
-                    "active_count": sum(s["status"] in active for s in sessions),
-                    "waiting_count": sum(s["status"] in waiting for s in sessions),
+                    "active_count": sum(s["status"] == "working" for s in sessions),
+                    "waiting_count": sum(s["status"] in {"waiting_approval", "waiting_input"} for s in sessions),
                     "error_count": sum(s["status"] in {"error", "stale"} for s in sessions),
-                    "sessions": sessions,
-                    "transcripts": transcripts,
-                    "results": results,
-                    "limits": formatted_limits,
-                    "usage": usage,
-                    "updated_at": int(time.time()),
-                    "error": usage_error,
-                }
-            )
-            self._wait(thread_refresh)
+                    "sessions": sessions, "transcripts": transcripts, "results": results,
+                    "limits": format_rate_limits(raw_limits), "usage": usage,
+                    "updated_at": int(time.time()), "error": next((error for error in errors if error), ""),
+                })
+                self._wait(local_refresh)
+        finally:
+            poll_stop.set()
+            self._poll_stop = None
 
     def run(self) -> None:
         delay = 2
